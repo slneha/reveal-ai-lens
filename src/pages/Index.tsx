@@ -18,6 +18,10 @@ const Index = () => {
   const [sensitivity, setSensitivity] = useState(0.2);
   const [showHumanLike, setShowHumanLike] = useState(true);
   const [showUncertainty, setShowUncertainty] = useState(false);
+  const [granularity, setGranularity] = useState(1);
+  const [analysisMode, setAnalysisMode] = useState<'words' | 'sentences'>('words');
+  const [showPunctuation, setShowPunctuation] = useState(false);
+  const [modelClassification, setModelClassification] = useState<{ model: string; confidence: number } | null>(null);
   const { toast } = useToast();
 
   const normalizeText = (text: string): string => {
@@ -35,20 +39,64 @@ const Index = () => {
       .replace(/[\u200B-\u200D\uFEFF]/g, '');
   };
 
+  const classifyModel = (text: string) => {
+    // Mock model classification based on text patterns
+    const gptIndicators = text.match(/\b(furthermore|moreover|delve|comprehensive)\b/gi)?.length || 0;
+    const claudeIndicators = text.match(/\b(certainly|i'd be happy|let me|i understand)\b/gi)?.length || 0;
+    const copilotIndicators = text.match(/\b(code|function|implement|solution)\b/gi)?.length || 0;
+    const geminiIndicators = text.match(/\b(explore|discover|innovative|creative)\b/gi)?.length || 0;
+
+    const models = [
+      { name: 'GPT-4', score: gptIndicators + Math.random() * 2 },
+      { name: 'Claude', score: claudeIndicators + Math.random() * 2 },
+      { name: 'GitHub Copilot', score: copilotIndicators + Math.random() * 2 },
+      { name: 'Gemini', score: geminiIndicators + Math.random() * 2 },
+    ];
+
+    models.sort((a, b) => b.score - a.score);
+    const totalScore = models.reduce((sum, m) => sum + m.score, 0);
+    const confidence = totalScore > 0 ? models[0].score / totalScore : 0.5;
+
+    return {
+      model: models[0].name,
+      confidence: Math.min(0.95, Math.max(0.3, confidence)),
+    };
+  };
+
   const mockAnalyze = (text: string) => {
-    // Simulate token-level analysis
-    const words = text.split(/(\s+)/);
-    const mockTokens: TokenData[] = words.map((word) => {
-      const isAiIndicator = word.toLowerCase().match(/\b(furthermore|moreover|consequently|thus|therefore|notably)\b/);
-      const isHumanIndicator = word.toLowerCase().match(/\b(like|just|really|actually|basically|kinda)\b/);
+    // Classify the model first
+    const classification = classifyModel(text);
+    setModelClassification(classification);
+
+    // Simulate token-level analysis based on granularity
+    let segments: string[];
+    
+    if (analysisMode === 'sentences') {
+      segments = text.split(/([.!?]+\s+)/).filter(s => s.trim());
+    } else if (granularity === 3) {
+      // Sentence-level granularity
+      segments = text.split(/([.!?]+)/).filter(s => s.trim());
+    } else if (granularity === 2) {
+      // Phrase-level granularity (split by commas and conjunctions)
+      segments = text.split(/([,;]|\band\b|\bor\b|\bbut\b)/i).filter(s => s.trim());
+    } else {
+      // Word-level granularity
+      segments = text.split(/(\s+)/);
+    }
+
+    const mockTokens: TokenData[] = segments.map((segment) => {
+      const isAiIndicator = segment.toLowerCase().match(/\b(furthermore|moreover|consequently|thus|therefore|notably|delve)\b/);
+      const isHumanIndicator = segment.toLowerCase().match(/\b(like|just|really|actually|basically|kinda)\b/);
+      const hasPunctuation = showPunctuation && segment.match(/[—;:]/);
       
       let score = Math.random() * 2 - 1; // Random between -1 and 1
       
       if (isAiIndicator) score = Math.max(0.5, score);
       if (isHumanIndicator) score = Math.min(-0.5, score);
+      if (hasPunctuation) score = Math.max(0.3, score); // Em dash and semicolons slightly AI-like
 
       return {
-        text: word,
+        text: segment,
         score,
         uncertainty: Math.random() * 0.5,
         features: [
@@ -67,6 +115,11 @@ const Index = () => {
             value: Math.random() * 2 - 1,
             description: "Variation in sentence length and rhythm",
           },
+          ...(hasPunctuation ? [{
+            name: "Punctuation Pattern",
+            value: 0.4,
+            description: "Complex punctuation usage detected (em dash, semicolon)",
+          }] : []),
         ],
       };
     });
@@ -98,7 +151,7 @@ const Index = () => {
     // Update input with normalized text
     setInputText(normalizedText);
 
-    // Simulate API call
+    // Simulate API call (longer for classification + analysis)
     setTimeout(() => {
       mockAnalyze(normalizedText);
       setIsAnalyzing(false);
@@ -110,7 +163,7 @@ const Index = () => {
           description: "Fixed spacing and formatting for better analysis",
         });
       }
-    }, 2000);
+    }, 2500);
   };
 
   const handleExport = () => {
@@ -225,7 +278,11 @@ const Index = () => {
             )}
             {hasAnalyzed && (
               <div className="min-h-[500px] space-y-4">
-                <ConfidenceGauge score={confidence} isAnalyzing={isAnalyzing} />
+                <ConfidenceGauge 
+                  score={confidence} 
+                  isAnalyzing={isAnalyzing}
+                  modelClassification={modelClassification || undefined}
+                />
                 <div className="p-4 bg-secondary rounded-lg max-h-[400px] overflow-y-auto">
                   <AnalysisOutput
                     tokens={tokens}
@@ -252,6 +309,12 @@ const Index = () => {
                 onShowHumanLikeChange={setShowHumanLike}
                 showUncertainty={showUncertainty}
                 onShowUncertaintyChange={setShowUncertainty}
+                granularity={granularity}
+                onGranularityChange={setGranularity}
+                analysisMode={analysisMode}
+                onAnalysisModeChange={setAnalysisMode}
+                showPunctuation={showPunctuation}
+                onShowPunctuationChange={setShowPunctuation}
                 onExport={handleExport}
               />
             </div>

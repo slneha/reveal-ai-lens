@@ -11,6 +11,12 @@ interface ControlPanelProps {
   onShowHumanLikeChange: (value: boolean) => void;
   showUncertainty: boolean;
   onShowUncertaintyChange: (value: boolean) => void;
+  granularity: number;
+  onGranularityChange: (value: number) => void;
+  analysisMode: 'words' | 'sentences';
+  onAnalysisModeChange: (value: 'words' | 'sentences') => void;
+  showPunctuation: boolean;
+  onShowPunctuationChange: (value: boolean) => void;
   onExport: () => void;
 }
 
@@ -21,6 +27,12 @@ export const ControlPanel = ({
   onShowHumanLikeChange,
   showUncertainty,
   onShowUncertaintyChange,
+  granularity,
+  onGranularityChange,
+  analysisMode,
+  onAnalysisModeChange,
+  showPunctuation,
+  onShowPunctuationChange,
   onExport,
 }: ControlPanelProps) => {
   return (
@@ -70,6 +82,62 @@ export const ControlPanel = ({
               checked={showUncertainty}
               onCheckedChange={onShowUncertaintyChange}
             />
+          </div>
+
+          <div className="flex items-center justify-between space-x-2">
+            <Label htmlFor="show-punctuation" className="text-sm font-medium cursor-pointer">
+              Highlight punctuation patterns
+            </Label>
+            <Switch
+              id="show-punctuation"
+              checked={showPunctuation}
+              onCheckedChange={onShowPunctuationChange}
+            />
+          </div>
+
+          <div className="space-y-3 pt-2">
+            <div className="flex items-center justify-between">
+              <Label htmlFor="granularity" className="text-sm font-medium">
+                Analysis Granularity
+              </Label>
+              <span className="text-sm text-muted-foreground">
+                {granularity === 1 ? 'Words' : granularity === 2 ? 'Phrases' : 'Sentences'}
+              </span>
+            </div>
+            <Slider
+              id="granularity"
+              min={1}
+              max={3}
+              step={1}
+              value={[granularity]}
+              onValueChange={(values) => onGranularityChange(values[0])}
+              className="w-full"
+            />
+            <p className="text-xs text-muted-foreground">
+              Adjust token grouping level
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <Label className="text-sm font-medium">Analysis Mode</Label>
+            <div className="flex gap-2">
+              <Button
+                variant={analysisMode === 'words' ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => onAnalysisModeChange('words')}
+                className="flex-1"
+              >
+                Words
+              </Button>
+              <Button
+                variant={analysisMode === 'sentences' ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => onAnalysisModeChange('sentences')}
+                className="flex-1"
+              >
+                Sentences
+              </Button>
+            </div>
           </div>
         </div>
       </div>

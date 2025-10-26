@@ -3,9 +3,13 @@ import { useEffect, useState } from "react";
 interface ConfidenceGaugeProps {
   score: number; // 0-1 range, where 0 is human, 1 is AI
   isAnalyzing?: boolean;
+  modelClassification?: {
+    model: string;
+    confidence: number;
+  };
 }
 
-export const ConfidenceGauge = ({ score, isAnalyzing }: ConfidenceGaugeProps) => {
+export const ConfidenceGauge = ({ score, isAnalyzing, modelClassification }: ConfidenceGaugeProps) => {
   const [animatedScore, setAnimatedScore] = useState(0);
 
   useEffect(() => {
@@ -24,6 +28,20 @@ export const ConfidenceGauge = ({ score, isAnalyzing }: ConfidenceGaugeProps) =>
 
   return (
     <div className="w-full space-y-4 animate-fade-in">
+      {modelClassification && (
+        <div className="p-4 bg-secondary/50 rounded-lg border border-border">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-sm font-medium text-foreground">Detected Model</h3>
+            <span className="text-xs text-muted-foreground">
+              {Math.round(modelClassification.confidence * 100)}% confidence
+            </span>
+          </div>
+          <div className="text-2xl font-bold bg-gradient-primary bg-clip-text text-transparent">
+            {modelClassification.model}
+          </div>
+        </div>
+      )}
+      
       <div className="flex items-center justify-between">
         <h3 className="text-lg font-semibold text-foreground">AI Detection Confidence</h3>
         <div className="flex items-center gap-2">
