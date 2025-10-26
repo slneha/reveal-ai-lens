@@ -20,6 +20,21 @@ const Index = () => {
   const [showUncertainty, setShowUncertainty] = useState(false);
   const { toast } = useToast();
 
+  const normalizeText = (text: string): string => {
+    return text
+      .trim()
+      // Replace multiple spaces with single space
+      .replace(/[ \t]+/g, ' ')
+      // Normalize line breaks (max 2 consecutive)
+      .replace(/\n{3,}/g, '\n\n')
+      // Remove leading/trailing spaces from each line
+      .split('\n')
+      .map(line => line.trim())
+      .join('\n')
+      // Remove zero-width spaces and other weird unicode
+      .replace(/[\u200B-\u200D\uFEFF]/g, '');
+  };
+
   const mockAnalyze = (text: string) => {
     // Simulate token-level analysis
     const words = text.split(/(\s+)/);
@@ -77,11 +92,24 @@ const Index = () => {
     setIsAnalyzing(true);
     setHasAnalyzed(false);
 
+    // Normalize text formatting before analysis
+    const normalizedText = normalizeText(inputText);
+    
+    // Update input with normalized text
+    setInputText(normalizedText);
+
     // Simulate API call
     setTimeout(() => {
-      mockAnalyze(inputText);
+      mockAnalyze(normalizedText);
       setIsAnalyzing(false);
       setHasAnalyzed(true);
+      
+      if (normalizedText !== inputText) {
+        toast({
+          title: "Text normalized",
+          description: "Fixed spacing and formatting for better analysis",
+        });
+      }
     }, 2000);
   };
 
