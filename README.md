@@ -48,6 +48,8 @@ This measures how much each token influences the AI logit. Gradient saliency the
 
 ## To Run
 
+py -r backend/requirements.txt
+py backend/main.py
+
 npm run dev
 
-py backend/main.py
