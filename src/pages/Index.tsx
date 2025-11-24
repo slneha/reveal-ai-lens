@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card } from "@/components/ui/card";
@@ -8,13 +8,11 @@ import { AnalysisOutput, SpanData, TokenData } from "@/components/AnalysisOutput
 import { ControlPanel } from "@/components/ControlPanel";
 import { SummaryPanel } from "@/components/SummaryPanel";
 import { useToast } from "@/hooks/use-toast";
-import { loadModel, analyzeText as analyzeBrowser, isModelLoaded } from "@/services/mlInference";
+import { API_URL } from "@/config";
 
 const Index = () => {
   const [inputText, setInputText] = useState("");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [isLoadingModel, setIsLoadingModel] = useState(false);
-  const [modelProgress, setModelProgress] = useState(0);
   const [hasAnalyzed, setHasAnalyzed] = useState(false);
   const [confidence, setConfidence] = useState(0.5);
   const [words, setWords] = useState<string[]>([]);
@@ -25,37 +23,6 @@ const Index = () => {
   const [showUncertainty, setShowUncertainty] = useState(false);
   const { toast } = useToast();
 
-  // Load model on mount
-  useEffect(() => {
-    if (!isModelLoaded() && !isLoadingModel) {
-      setIsLoadingModel(true);
-      toast({
-        title: "Loading AI Model",
-        description: "Downloading model for browser-based inference...",
-      });
-      
-      loadModel((progress) => {
-        setModelProgress(progress);
-      })
-        .then(() => {
-          setIsLoadingModel(false);
-          setModelProgress(100);
-          toast({
-            title: "Model Ready",
-            description: "AI detection model loaded successfully!",
-          });
-        })
-        .catch((error) => {
-          setIsLoadingModel(false);
-          console.error("Failed to load model:", error);
-          toast({
-            title: "Model Loading Failed",
-            description: "Could not load AI model. Please refresh the page.",
-            variant: "destructive",
-          });
-        });
-    }
-  }, []);
 
   interface FeatureSummary {
     name: string;
@@ -124,29 +91,31 @@ const Index = () => {
       return;
     }
 
-    if (!isModelLoaded()) {
-      toast({
-        title: "Model not ready",
-        description: "Please wait for the AI model to finish loading",
-        variant: "destructive",
-      });
-      return;
-    }
-
     setIsAnalyzing(true);
     setHasAnalyzed(false);
 
-    // Normalize text formatting before analysis
     const normalizedText = normalizeText(inputText);
-    
-    // Update input with normalized text
     setInputText(normalizedText);
 
-    // Use browser-based ML inference
     try {
-      const result = await analyzeBrowser(normalizedText);
+      const response = await fetch(`${API_URL}/api/analyze`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          text: normalizedText,
+          top_k: 20,
+          max_length: 512,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`API error: ${response.status}`);
+      }
+
+      const result = await response.json();
       
-      // Store words and spans from analysis
       setWords(result.words || []);
       setSpans(result.spans || []);
       setConfidence(result.p_ai);
@@ -204,6 +173,7 @@ const Index = () => {
           }));
         setSentenceSummaries(fallbackSentences);
       }
+      
       setIsAnalyzing(false);
       setHasAnalyzed(true);
       
@@ -259,18 +229,13 @@ const Index = () => {
               <h2 className="text-xl font-semibold text-foreground">Input Text</h2>
               <Button
                 onClick={handleAnalyze}
-                disabled={isAnalyzing || isLoadingModel}
+                disabled={isAnalyzing}
                 className="bg-gradient-primary hover:shadow-glow transition-all"
               >
                 {isAnalyzing ? (
                   <>
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                     Analyzing...
-                  </>
-                ) : isLoadingModel ? (
-                  <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Loading Model ({modelProgress}%)
                   </>
                 ) : (
                   "Analyze Text"
