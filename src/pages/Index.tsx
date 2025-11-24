@@ -39,97 +39,97 @@ const Index = () => {
       .replace(/[\u200B-\u200D\uFEFF]/g, '');
   };
 
-  const classifyModel = (text: string) => {
-    // Mock model classification based on text patterns
-    const gptIndicators = text.match(/\b(furthermore|moreover|delve|comprehensive)\b/gi)?.length || 0;
-    const claudeIndicators = text.match(/\b(certainly|i'd be happy|let me|i understand)\b/gi)?.length || 0;
-    const copilotIndicators = text.match(/\b(code|function|implement|solution)\b/gi)?.length || 0;
-    const geminiIndicators = text.match(/\b(explore|discover|innovative|creative)\b/gi)?.length || 0;
-
-    const models = [
-      { name: 'GPT-4', score: gptIndicators + Math.random() * 2 },
-      { name: 'Claude', score: claudeIndicators + Math.random() * 2 },
-      { name: 'GitHub Copilot', score: copilotIndicators + Math.random() * 2 },
-      { name: 'Gemini', score: geminiIndicators + Math.random() * 2 },
-    ];
-
-    models.sort((a, b) => b.score - a.score);
-    const totalScore = models.reduce((sum, m) => sum + m.score, 0);
-    const confidence = totalScore > 0 ? models[0].score / totalScore : 0.5;
-
-    return {
-      model: models[0].name,
-      confidence: Math.min(0.95, Math.max(0.3, confidence)),
-    };
+  const classifyModelFromScores = (scores: any): string => {
+    const { lexical_complexity, formality, burstiness } = scores;
+    
+    if (formality > 0.7 && lexical_complexity > 0.6) {
+      return "Claude";
+    } else if (burstiness > 0.7 && formality < 0.5) {
+      return "GPT-4";
+    } else if (lexical_complexity > 0.7) {
+      return "Copilot";
+    } else if (formality > 0.6) {
+      return "Gemini";
+    }
+    return "GPT-3.5";
   };
 
-  const mockAnalyze = (text: string) => {
-    // Classify the model first
-    const classification = classifyModel(text);
-    setModelClassification(classification);
+  const analyzeText = async (text: string) => {
+    try {
+      const response = await fetch("http://localhost:5000/api/analyze", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          text: text,
+          top_k: 3,
+          max_length: 512,
+        }),
+      });
 
-    // Simulate token-level analysis based on granularity
-    let segments: string[];
-    
-    if (analysisMode === 'sentences') {
-      segments = text.split(/([.!?]+\s+)/).filter(s => s.trim());
-    } else if (granularity === 3) {
-      // Sentence-level granularity
-      segments = text.split(/([.!?]+)/).filter(s => s.trim());
-    } else if (granularity === 2) {
-      // Phrase-level granularity (split by commas and conjunctions)
-      segments = text.split(/([,;]|\band\b|\bor\b|\bbut\b)/i).filter(s => s.trim());
-    } else {
-      // Word-level granularity
-      segments = text.split(/(\s+)/);
+      if (!response.ok) {
+        throw new Error(`API error: ${response.statusText}`);
+      }
+
+      const result = await response.json();
+
+      // Convert words to token format with gradient scores
+      const apiTokens: TokenData[] = result.words.map((word: string, idx: number) => {
+        // Find if this word is in any span for scoring
+        let score = 0;
+        let spanFeature = null;
+        
+        for (const span of result.spans) {
+          if (span.text.includes(word)) {
+            score = Math.min(span.score / 10.0, 1.0);
+            spanFeature = span.dom_feature;
+            break;
+          }
+        }
+
+        // Convert to [-1, 1] range for display (AI-like = positive, human-like = negative)
+        const displayScore = (score - 0.5) * 2;
+
+        return {
+          text: word,
+          score: displayScore,
+          uncertainty: Math.random() * 0.3,
+          features: [
+            {
+              name: "Lexical Complexity",
+              value: result.global_scores.lexical_complexity * 2 - 1,
+              description: "Long and technical vocabulary usage",
+            },
+            {
+              name: "Formality",
+              value: result.global_scores.formality * 2 - 1,
+              description: "Formal, academic-style language patterns",
+            },
+            {
+              name: "Burstiness",
+              value: result.global_scores.burstiness * 2 - 1,
+              description: "Uniformity in sentence length and rhythm",
+            },
+          ],
+        };
+      });
+
+      setTokens(apiTokens);
+      setConfidence(result.p_ai);
+
+      // Set model classification based on global scores
+      const modelName = classifyModelFromScores(result.global_scores);
+      setModelClassification({
+        model: modelName,
+        confidence: result.p_ai,
+      });
+
+      return result;
+    } catch (error) {
+      console.error("Analysis error:", error);
+      throw error;
     }
-
-    const mockTokens: TokenData[] = segments.map((segment) => {
-      const isAiIndicator = segment.toLowerCase().match(/\b(furthermore|moreover|consequently|thus|therefore|notably|delve)\b/);
-      const isHumanIndicator = segment.toLowerCase().match(/\b(like|just|really|actually|basically|kinda)\b/);
-      const hasPunctuation = showPunctuation && segment.match(/[—;:]/);
-      
-      let score = Math.random() * 2 - 1; // Random between -1 and 1
-      
-      if (isAiIndicator) score = Math.max(0.5, score);
-      if (isHumanIndicator) score = Math.min(-0.5, score);
-      if (hasPunctuation) score = Math.max(0.3, score); // Em dash and semicolons slightly AI-like
-
-      return {
-        text: segment,
-        score,
-        uncertainty: Math.random() * 0.5,
-        features: [
-          {
-            name: "Formality Score",
-            value: Math.random() * 2 - 1,
-            description: isAiIndicator ? "Formal language pattern detected" : "Casual language pattern",
-          },
-          {
-            name: "Sentence Complexity",
-            value: Math.random() * 2 - 1,
-            description: "Measures syntactic complexity and structure",
-          },
-          {
-            name: "Burstiness",
-            value: Math.random() * 2 - 1,
-            description: "Variation in sentence length and rhythm",
-          },
-          ...(hasPunctuation ? [{
-            name: "Punctuation Pattern",
-            value: 0.4,
-            description: "Complex punctuation usage detected (em dash, semicolon)",
-          }] : []),
-        ],
-      };
-    });
-
-    // Calculate overall confidence (weighted average)
-    const avgScore = mockTokens.reduce((sum, token) => sum + token.score, 0) / mockTokens.length;
-    const normalizedConfidence = (avgScore + 1) / 2; // Convert from [-1, 1] to [0, 1]
-
-    setTokens(mockTokens);
-    setConfidence(normalizedConfidence);
   };
 
   const handleAnalyze = async () => {
@@ -151,9 +151,9 @@ const Index = () => {
     // Update input with normalized text
     setInputText(normalizedText);
 
-    // Simulate API call (longer for classification + analysis)
-    setTimeout(() => {
-      mockAnalyze(normalizedText);
+    // Call real API
+    try {
+      await analyzeText(normalizedText);
       setIsAnalyzing(false);
       setHasAnalyzed(true);
       
@@ -163,7 +163,14 @@ const Index = () => {
           description: "Fixed spacing and formatting for better analysis",
         });
       }
-    }, 2500);
+    } catch (error) {
+      setIsAnalyzing(false);
+      toast({
+        title: "Analysis failed",
+        description: "Could not connect to backend API. Make sure the Flask server is running on port 5000.",
+        variant: "destructive",
+      });
+    }
   };
 
   const handleExport = () => {
