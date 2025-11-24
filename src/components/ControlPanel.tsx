@@ -9,8 +9,6 @@ interface ControlPanelProps {
   onSensitivityChange: (value: number) => void;
   showUncertainty: boolean;
   onShowUncertaintyChange: (value: boolean) => void;
-  showOpposing: boolean;
-  onShowOpposingChange: (value: boolean) => void;
   onExport: () => void;
   prediction: number;
 }
@@ -20,13 +18,10 @@ export const ControlPanel = ({
   onSensitivityChange,
   showUncertainty,
   onShowUncertaintyChange,
-  showOpposing,
-  onShowOpposingChange,
   onExport,
   prediction,
 }: ControlPanelProps) => {
-  const viewedPrediction = showOpposing ? (prediction === 1 ? 0 : 1) : prediction;
-  const isAI = viewedPrediction === 1;
+  const isAI = prediction === 1;
   const highlightLabel = isAI ? "AI-supporting spans" : "Human-supporting spans";
   const highlightColor = isAI ? "bg-ai-like" : "bg-human-like";
   const highlightText = isAI ? "text-ai-like" : "text-human-like";
