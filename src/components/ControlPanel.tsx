@@ -9,7 +9,10 @@ interface ControlPanelProps {
   onSensitivityChange: (value: number) => void;
   showUncertainty: boolean;
   onShowUncertaintyChange: (value: boolean) => void;
+  showOpposing: boolean;
+  onShowOpposingChange: (value: boolean) => void;
   onExport: () => void;
+  prediction: number;
 }
 
 export const ControlPanel = ({
@@ -17,8 +20,17 @@ export const ControlPanel = ({
   onSensitivityChange,
   showUncertainty,
   onShowUncertaintyChange,
+  showOpposing,
+  onShowOpposingChange,
   onExport,
+  prediction,
 }: ControlPanelProps) => {
+  const viewedPrediction = showOpposing ? (prediction === 1 ? 0 : 1) : prediction;
+  const isAI = viewedPrediction === 1;
+  const highlightLabel = isAI ? "AI-supporting spans" : "Human-supporting spans";
+  const highlightColor = isAI ? "bg-ai-like" : "bg-human-like";
+  const highlightText = isAI ? "text-ai-like" : "text-human-like";
+
   return (
     <div className="space-y-6 p-6 bg-card border border-border rounded-lg shadow-card">
       <div>
@@ -70,8 +82,8 @@ export const ControlPanel = ({
         <div className="text-xs text-muted-foreground space-y-2">
           <p className="font-semibold text-foreground mb-2">Highlighting Legend</p>
           <div className="flex items-center gap-2">
-            <div className="w-3 h-3 rounded-full bg-ai-like" />
-            <span>AI-generated spans</span>
+            <div className={`w-3 h-3 rounded-full ${highlightColor}`} />
+            <span className={highlightText}>{highlightLabel}</span>
           </div>
           <div className="flex items-center gap-2">
             <div className="w-3 h-3 rounded border border-dashed border-yellow-500 bg-yellow-500/20" />

@@ -1,73 +1,55 @@
-# Welcome to your Lovable project
+# Explainable AI-vs-Human Text Detector  
+RoBERTa + Gradient-Based Saliency + Linguistic Feature Attribution
 
-## Project info
+This project implements an interpretable classifier that distinguishes between human-written and machine-generated text using the model  
+`andreas122001/roberta-mixed-detector` and a custom explanation module.
 
-**URL**: https://lovable.dev/projects/b2ba9956-5e39-44cb-bba1-e8fa481f1940
+The objective is not only to output a class label, but to provide a clear justification of the decision by identifying the specific phrases that influenced the model toward the AI or human class.
 
-## How can I edit this code?
+---
 
-There are several ways of editing your application.
+## Research Motivation
 
-**Use Lovable**
+Before implementation, an empirical analysis was conducted on a dataset of AI-generated and human-generated text. The goal was to identify latent linguistic variables with the strongest statistical correlation to the model’s probability output (`p_ai`).
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/b2ba9956-5e39-44cb-bba1-e8fa481f1940) and start prompting.
+The following factors exhibited the highest correlation:
 
-Changes made via Lovable will be committed automatically to this repo.
+- Lexical complexity (long or technical vocabulary)
+- Formality markers
+- Burstiness / variance in sentence length
+- Assertiveness vs. hedging language
+- Topic uniformity across sentences
+- Stopword distribution patterns
 
-**Use your preferred IDE**
+These correlated variables were incorporated into the interpretability layer to contextualize the gradient-based saliency results. They do not drive the final classification but help users understand why the model favored the AI-generated or human-generated label.
 
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
+---
 
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
+## Key Features
 
-Follow these steps:
+| Component | Purpose |
+|----------|----------|
+| RoBERTa classifier | Binary detection: 0 = Human, 1 = AI |
+| Gradient-based saliency (primary signal) | Highlights the exact phrases that increase the AI or human logit |
+| Correlation-based linguistic insights (secondary signal) | Adds descriptive interpretation without interfering with gradients |
+| Span-level explanation | Identifies influential multi-word segments rather than isolated tokens |
+| Notebook and API support | Works with Pandas DataFrames or raw text |
 
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
+---
 
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
+## Why Gradients Instead of Attention
 
-# Step 3: Install the necessary dependencies.
-npm i
+Attention weights do not correspond directly to the final classification and are not class-specific.  
+The explanation framework uses:
 
-# Step 4: Start the development server with auto-reloading and an instant preview.
+‖ ∂(logit_AI) / ∂(embedding(token)) ‖
+
+This measures how much each token influences the AI logit. Gradient saliency therefore provides a more direct and faithful attribution than attention or handcrafted features alone. Linguistic variables are included separately to support interpretability but do not override gradient signals.
+
+---
+
+## To Run
+
 npm run dev
-```
 
-**Edit a file directly in GitHub**
-
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
-
-**Use GitHub Codespaces**
-
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
-
-## What technologies are used for this project?
-
-This project is built with:
-
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
-
-## How can I deploy this project?
-
-Simply open [Lovable](https://lovable.dev/projects/b2ba9956-5e39-44cb-bba1-e8fa481f1940) and click on Share -> Publish.
-
-## Can I connect a custom domain to my Lovable project?
-
-Yes, you can!
-
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
-
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+py backend/main.py

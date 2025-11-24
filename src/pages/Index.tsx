@@ -4,7 +4,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Card } from "@/components/ui/card";
 import { Loader2, Sparkles } from "lucide-react";
 import { ConfidenceGauge } from "@/components/ConfidenceGauge";
-import { AnalysisOutput, SpanData } from "@/components/AnalysisOutput";
+import { AnalysisOutput, SpanData, TokenData } from "@/components/AnalysisOutput";
 import { ControlPanel } from "@/components/ControlPanel";
 import { SummaryPanel } from "@/components/SummaryPanel";
 import { useToast } from "@/hooks/use-toast";
@@ -14,11 +14,92 @@ const Index = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [hasAnalyzed, setHasAnalyzed] = useState(false);
   const [confidence, setConfidence] = useState(0.5);
+  const [pHuman, setPHuman] = useState<number | undefined>(undefined);
   const [words, setWords] = useState<string[]>([]);
   const [spans, setSpans] = useState<SpanData[]>([]);
+  const [spansOpposing, setSpansOpposing] = useState<SpanData[]>([]);
+  const [tokens, setTokens] = useState<TokenData[]>([]);
+  const [prediction, setPrediction] = useState<0 | 1>(1);
   const [sensitivity, setSensitivity] = useState(0.3);
   const [showUncertainty, setShowUncertainty] = useState(false);
+  const [showOpposing, setShowOpposing] = useState(false);
   const { toast } = useToast();
+
+  interface FeatureSummary {
+    name: string;
+    value: number;
+    description: string;
+    direction?: "ai" | "human";
+  }
+
+  interface BackendImpact {
+    key: string;
+    label?: string;
+    signed_score?: number;
+    description?: string;
+    direction?: "ai" | "human";
+  }
+
+  interface SentenceSummary {
+    text: string;
+    score: number;
+  }
+
+  const defaultFeatures: FeatureSummary[] = [
+    {
+      name: "Lexical Diversity",
+      value: 0,
+      description: "Variety of vocabulary used throughout the text",
+    },
+    {
+      name: "Formality Level",
+      value: 0,
+      description: "Degree of formal connectors vs. first-person cues",
+    },
+    {
+      name: "Burstiness",
+      value: 0,
+      description: "Variation in sentence length and rhythm",
+    },
+  ];
+
+  const [featureSummaries, setFeatureSummaries] = useState<FeatureSummary[]>(defaultFeatures);
+  const [sentenceSummaries, setSentenceSummaries] = useState<SentenceSummary[]>([]);
+  const [sentenceSummariesOpposing, setSentenceSummariesOpposing] = useState<SentenceSummary[]>([]);
+  const [wordSupportAI, setWordSupportAI] = useState<number[]>([]);
+  const [wordSupportHuman, setWordSupportHuman] = useState<number[]>([]);
+  const [wordSaliencyAI, setWordSaliencyAI] = useState<number[]>([]);
+  const [wordSaliencyHuman, setWordSaliencyHuman] = useState<number[]>([]);
+
+  const mapSentences = (items?: { text: string; score?: number }[]) =>
+    (items ?? []).map((sentence) => ({
+      text: sentence.text,
+      score: (Math.max(0, Math.min(sentence.score ?? 0, 1)) * 2) - 1,
+    }));
+
+  const buildFallbackSentences = (text: string) =>
+    text
+      .split(/[.!?]+/)
+      .filter((s) => s.trim())
+      .map((sentence) => ({
+        text: sentence.trim(),
+        score: 0,
+      }));
+
+  const mapSentences = (items?: { text: string; score?: number }[]) =>
+    (items ?? []).map((sentence) => ({
+      text: sentence.text,
+      score: (Math.max(0, Math.min(sentence.score ?? 0, 1)) * 2) - 1,
+    }));
+
+  const buildFallbackSentences = (text: string) =>
+    text
+      .split(/[.!?]+/)
+      .filter((s) => s.trim())
+      .map((sentence) => ({
+        text: sentence.trim(),
+        score: 0,
+      }));
 
   const normalizeText = (text: string): string => {
     return text
@@ -54,12 +135,6 @@ const Index = () => {
       }
 
       const result = await response.json();
-
-      // Store words and spans from API
-      setWords(result.words || []);
-      setSpans(result.spans || []);
-      setConfidence(result.p_ai);
-
       return result;
     } catch (error) {
       console.error("Analysis error:", error);
@@ -88,7 +163,62 @@ const Index = () => {
 
     // Call real API
     try {
-      await analyzeText(normalizedText);
+      const result = await analyzeText(normalizedText);
+      setWords(result.words || []);
+      setSpans(result.spans || []);
+      setSpansOpposing(result.spans_opposing || []);
+      setConfidence(result.p_ai ?? 0.5);
+      setPHuman(result.p_human !== undefined ? result.p_human : undefined);
+      setTokens(result.tokens || []);
+      setPrediction(result.prediction ?? 1);
+      setWordSupportAI(result.word_support_ai || []);
+      setWordSupportHuman(result.word_support_human || []);
+      setWordSaliencyAI(result.word_saliency_ai || []);
+      setWordSaliencyHuman(result.word_saliency_human || []);
+
+      const impacts: BackendImpact[] = Array.isArray(result.feature_impacts) ? result.feature_impacts : [];
+      if (impacts.length > 0) {
+        const mapped: FeatureSummary[] = impacts.map((impact) => {
+          const signed = impact.signed_score ?? 0;
+          return {
+            name: impact.label || impact.key,
+            value: signed,
+            description: impact.description || "Model correlation signal.",
+            direction: impact.direction ?? (signed >= 0 ? "ai" : "human"),
+          };
+        });
+        setFeatureSummaries(mapped);
+      } else {
+        const globalScores = result?.global_scores ?? {};
+        const fallback: FeatureSummary[] = [
+          {
+            name: "Lexical Diversity",
+            value: ((globalScores.lexical_complexity ?? 0.5) - 0.5) * 2,
+            description: "Variety of vocabulary used throughout the text",
+          },
+          {
+            name: "Formality Level",
+            value: ((globalScores?.formality ?? 0.5) - 0.5) * 2,
+            description: "Degree of formal connectors vs. first-person cues",
+          },
+          {
+            name: "Burstiness",
+            value: ((globalScores.burstiness ?? 0.5) - 0.5) * 2,
+            description: "Variation in sentence length and rhythm",
+          },
+        ];
+        setFeatureSummaries(fallback);
+      }
+
+      const fallbackSentences = buildFallbackSentences(normalizedText);
+      const backendSentences = mapSentences(result?.sentences);
+      setSentenceSummaries(
+        backendSentences.length > 0 ? backendSentences : fallbackSentences
+      );
+      const backendSentencesOpposing = mapSentences(result?.sentences_opposing);
+      setSentenceSummariesOpposing(
+        backendSentencesOpposing.length > 0 ? backendSentencesOpposing : fallbackSentences
+      );
       setIsAnalyzing(false);
       setHasAnalyzed(true);
       
@@ -115,37 +245,8 @@ const Index = () => {
     });
   };
 
-  // Generate summary data
-  const features = [
-    {
-      name: "Lexical Diversity",
-      value: 0.72,
-      description: "Variety of vocabulary used throughout the text",
-    },
-    {
-      name: "Syntactic Complexity",
-      value: 0.65,
-      description: "Complexity of sentence structures",
-    },
-    {
-      name: "Formality Level",
-      value: 0.58,
-      description: "Degree of formal vs. casual language",
-    },
-    {
-      name: "Burstiness",
-      value: 0.45,
-      description: "Variation in sentence length and rhythm",
-    },
-  ];
-
-  const sentences = inputText
-    .split(/[.!?]+/)
-    .filter((s) => s.trim())
-    .map((sentence) => ({
-      text: sentence.trim(),
-      score: Math.random() * 2 - 1,
-    }));
+  const activeSpans = showOpposing ? spansOpposing : spans;
+  const activeSentences = showOpposing ? sentenceSummariesOpposing : sentenceSummaries;
 
   return (
     <div className="min-h-screen bg-background">
@@ -221,15 +322,23 @@ const Index = () => {
             {hasAnalyzed && (
               <div className="min-h-[500px] space-y-4">
                 <ConfidenceGauge 
-                  score={confidence} 
+                  score={confidence}
+                  pHuman={pHuman}
                   isAnalyzing={isAnalyzing}
                 />
                 <div className="p-4 bg-secondary rounded-lg max-h-[400px] overflow-y-auto">
                   <AnalysisOutput
                     words={words}
-                    spans={spans}
+                    spans={activeSpans}
+                    tokens={tokens}
                     showUncertainty={showUncertainty}
                     sensitivity={sensitivity}
+                    prediction={prediction}
+                    showOpposing={showOpposing}
+                    wordSupportAI={wordSupportAI}
+                    wordSupportHuman={wordSupportHuman}
+                    wordSaliencyAI={wordSaliencyAI}
+                    wordSaliencyHuman={wordSaliencyHuman}
                   />
                 </div>
               </div>
@@ -240,7 +349,10 @@ const Index = () => {
         {hasAnalyzed && (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <div className="lg:col-span-2">
-              <SummaryPanel features={features} sentences={sentences} />
+              <SummaryPanel 
+                features={featureSummaries} 
+                sentences={activeSentences}
+              />
             </div>
             <div>
               <ControlPanel
@@ -248,7 +360,10 @@ const Index = () => {
                 onSensitivityChange={setSensitivity}
                 showUncertainty={showUncertainty}
                 onShowUncertaintyChange={setShowUncertainty}
+                showOpposing={showOpposing}
+                onShowOpposingChange={setShowOpposing}
                 onExport={handleExport}
+                prediction={prediction}
               />
             </div>
           </div>

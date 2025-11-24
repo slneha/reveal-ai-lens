@@ -1,10 +1,10 @@
 import { Card } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
 
 interface FeatureImportance {
   name: string;
   value: number;
   description: string;
+  direction?: "ai" | "human";
 }
 
 interface SentenceScore {
@@ -17,6 +17,19 @@ interface SummaryPanelProps {
   sentences: SentenceScore[];
 }
 
+const getImpactMeta = (value: number, directionHint?: "ai" | "human") => {
+  const isAI = directionHint ? directionHint === "ai" : value >= 0;
+  return {
+    label: isAI ? "Pushes toward AI" : "Signals human writing",
+    tone: isAI ? "text-ai-like" : "text-human-like",
+    bar: isAI ? "hsl(var(--ai-like))" : "hsl(var(--human-like))",
+    narrative: isAI
+      ? "This signal increases the classifier’s confidence that the text is AI-written."
+      : "This signal counters the classifier and leans toward human authorship.",
+    directionSymbol: isAI ? "AI↑" : "Human↑",
+  };
+};
+
 export const SummaryPanel = ({ features, sentences }: SummaryPanelProps) => {
   return (
     <div className="space-y-6 animate-fade-in">
@@ -27,13 +40,34 @@ export const SummaryPanel = ({ features, sentences }: SummaryPanelProps) => {
             <div key={idx} className="space-y-2">
               <div className="flex items-center justify-between">
                 <span className="text-sm font-medium text-foreground">{feature.name}</span>
-                <span className="text-sm text-muted-foreground">{Math.abs(feature.value).toFixed(2)}</span>
+                <span className="text-xs font-semibold text-muted-foreground tracking-wide">
+                  {feature.value >= 0 ? "+" : "-"}
+                  {Math.abs(feature.value).toFixed(2)}
+                </span>
               </div>
-              <Progress 
-                value={Math.abs(feature.value) * 100} 
-                className="h-2"
-              />
-              <p className="text-xs text-muted-foreground">{feature.description}</p>
+              {(() => {
+                const impact = getImpactMeta(feature.value, feature.direction);
+                return (
+                  <>
+                    <div className="flex items-center justify-between text-[0.70rem] uppercase font-semibold">
+                      <span className={impact.tone}>{impact.label}</span>
+                      <span className="text-muted-foreground">{impact.directionSymbol}</span>
+                    </div>
+                    <div className="h-2 bg-background rounded-full overflow-hidden">
+                      <div
+                        className="h-full rounded-full transition-all"
+                        style={{
+                          width: `${Math.min(Math.abs(feature.value), 1) * 100}%`,
+                          backgroundColor: impact.bar,
+                        }}
+                      />
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {feature.description} {impact.narrative}
+                    </p>
+                  </>
+                );
+              })()}
             </div>
           ))}
         </div>

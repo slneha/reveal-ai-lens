@@ -93,36 +93,71 @@ def analyze_text():
             max_length=max_length,
             top_k=20
         )
-        
-        # Convert words to token format for frontend compatibility
+
+        words = result.get("words", [])
+        word_importance = result.get("word_importance", [0.0] * len(words))
+        word_total_strength = result.get("word_total_strength", [0.0] * len(words))
+        word_total_opposing = result.get("word_total_opposing", [0.0] * len(words))
+        word_support_ai = result.get("word_support_ai", [0.0] * len(words))
+        word_support_human = result.get("word_support_human", [0.0] * len(words))
+        word_contrib_signed = result.get("word_contrib_signed", [0.0] * len(words))
+        lex_contrib = result.get("lex_contrib", [0.0] * len(words))
+        form_contrib = result.get("form_contrib", [0.0] * len(words))
+        burst_contrib = result.get("burst_contrib", [0.0] * len(words))
+
+        max_word_strength = max(word_total_strength) if word_total_strength else 0.0
+        denom_strength = max_word_strength or 1.0
+
         tokens = []
-        for word in result.get("words", []):
-            # Simple score assignment based on spans
-            score = 0.5  # default neutral
-            features = []
-            
-            # Check if word is in any span
-            for span in result.get("spans", []):
-                if word in span["text"]:
-                    score = min(span["score"] / 10.0, 1.0)  # normalize
-                    features.append(span["dom_feature"])
-            
-            tokens.append({
-                "text": word,
-                "score": score,
-                "features": features if features else ["neutral"]
-            })
-        
-        # Format response for frontend
+        for i, word in enumerate(words):
+            signed_score = float(word_contrib_signed[i]) if i < len(word_contrib_signed) else 0.0
+            raw_strength = float(word_total_strength[i]) if i < len(word_total_strength) else 0.0
+            normalized_strength = raw_strength / denom_strength if denom_strength > 0 else 0.0
+            word_len = max(len(word.strip()), 1)
+            length_weight = 0.35 + 0.65 * min(1.0, word_len / 12.0)
+            score = float(min(1.0, normalized_strength * length_weight))
+
+            feats = []
+            if i < len(lex_contrib) and lex_contrib[i] > 0:
+                feats.append("lexical_complexity")
+            if i < len(form_contrib) and form_contrib[i] > 0:
+                feats.append("formality")
+            if i < len(burst_contrib) and burst_contrib[i] > 0:
+                feats.append("burstiness")
+            if not feats:
+                feats = ["neutral"]
+
+            tokens.append(
+                {
+                    "text": word,
+                    "score": score,
+                    "signed_score": signed_score,
+                    "features": feats,
+                }
+            )
+
         response = {
             "prediction": result["prediction"],
             "p_ai": result["p_ai"],
-            "confidence": result["p_ai"],  # frontend expects this
+            "p_human": result.get("p_human"),
+            "confidence": result["p_ai"],
             "global_scores": result["global_scores"],
             "spans": result["spans"],
+            "spans_opposing": result.get("spans_opposing", []),
             "words": result["words"],
-            "tokens": tokens
+            "tokens": tokens,
+            "sentences": result.get("sentences", []),
+            "sentences_opposing": result.get("sentences_opposing", []),
+            "feature_impacts": result.get("feature_impacts", []),
+            "word_contrib_signed": word_contrib_signed,
+            "word_total_strength": word_total_strength,
+            "word_total_opposing": word_total_opposing,
+            "word_support_ai": word_support_ai,
+            "word_support_human": word_support_human,
+            "word_saliency_ai": result.get("word_saliency_ai", []),
+            "word_saliency_human": result.get("word_saliency_human", []),
         }
+
         
         return jsonify(response), 200
         

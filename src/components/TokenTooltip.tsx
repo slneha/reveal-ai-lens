@@ -4,10 +4,15 @@ import { TrendingUp } from "lucide-react";
 interface TokenTooltipProps {
   span: SpanData;
   position: { x: number; y: number };
+  prediction: number;
 }
 
-export const TokenTooltip = ({ span, position }: TokenTooltipProps) => {
+export const TokenTooltip = ({ span, position, prediction }: TokenTooltipProps) => {
   const scorePercentage = Math.round(Math.min(span.score / 10.0, 1.0) * 100);
+  const isAI = prediction === 1;
+  const toneClass = isAI ? "text-ai-like" : "text-human-like";
+  const label = isAI ? "AI Contribution" : "Human Evidence";
+  const iconColor = isAI ? "text-ai-like" : "text-human-like";
 
   const getFeatureLabel = (feature: string) => {
     switch (feature) {
@@ -37,13 +42,13 @@ export const TokenTooltip = ({ span, position }: TokenTooltipProps) => {
             <div className="font-mono text-xs text-muted-foreground mb-1">Detected Span</div>
             <div className="font-semibold text-foreground break-words">"{span.text}"</div>
           </div>
-          <TrendingUp className="w-5 h-5 text-ai-like flex-shrink-0 ml-2" />
+          <TrendingUp className={`w-5 h-5 ${iconColor} flex-shrink-0 ml-2`} />
         </div>
 
         <div className="space-y-2">
           <div className="flex items-center justify-between text-sm">
-            <span className="text-muted-foreground">AI Contribution:</span>
-            <span className="font-semibold text-ai-like">
+            <span className="text-muted-foreground">{label}:</span>
+            <span className={`font-semibold ${toneClass}`}>
               {scorePercentage}%
             </span>
           </div>
