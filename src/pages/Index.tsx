@@ -130,12 +130,18 @@ const Index = () => {
     // Update input with normalized text
     setInputText(normalizedText);
 
-    // Call real API
+    // Call API
     try {
       const result = await analyzeText(normalizedText);
+      
+      // Store words and spans
+      setWords(result.words || []);
+      setSpans(result.spans || []);
+      setConfidence(result.p_ai);
       setTokens(result.tokens || []);
       setPrediction(result.prediction ?? 1);
 
+      // Process feature impacts
       const impacts: BackendImpact[] = Array.isArray(result.feature_impacts) ? result.feature_impacts : [];
       if (impacts.length > 0) {
         const mapped: FeatureSummary[] = impacts.map((impact) => {
@@ -170,6 +176,7 @@ const Index = () => {
         setFeatureSummaries(fallback);
       }
 
+      // Process sentences
       const backendSentences: SentenceSummary[] =
         (result?.sentences ?? []).map((sentence: { text: string; score: number }) => ({
           text: sentence.text,
@@ -188,6 +195,7 @@ const Index = () => {
           }));
         setSentenceSummaries(fallbackSentences);
       }
+      
       setIsAnalyzing(false);
       setHasAnalyzed(true);
       
@@ -201,7 +209,7 @@ const Index = () => {
       setIsAnalyzing(false);
       toast({
         title: "Analysis failed",
-        description: "Could not connect to backend API. Please try again later.",
+        description: "Could not connect to backend API. Please make sure the FastAPI server is running on port 5000.",
         variant: "destructive",
       });
     }

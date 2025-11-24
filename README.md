@@ -48,8 +48,26 @@ This measures how much each token influences the AI logit. Gradient saliency the
 
 ## To Run
 
-py -r backend/requirements.txt
-py backend/main.py
+1. **Install Python dependencies:**
+   ```bash
+   pip install -r backend/requirements.txt
+   ```
 
-npm run dev
+2. **Install Node dependencies:**
+   ```bash
+   npm install
+   ```
+
+3. **Start both frontend and backend:**
+   ```bash
+   npm run dev
+   ```
+   This will automatically start:
+   - Frontend (Vite) on `http://localhost:8080`
+   - Backend (Uvicorn) on `http://localhost:5000` with auto-reload enabled
+
+**Alternative: Run separately**
+
+- Frontend only: `npm run dev:frontend`
+- Backend only: `npm run dev:backend` (uses uvicorn with auto-reload)
 

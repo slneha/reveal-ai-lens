@@ -181,13 +181,19 @@ async def analyze_text(request: AnalyzeRequest):
 
 
 if __name__ == "__main__":
-    # Run FastAPI app with uvicorn
+    # Use uvicorn (works on Windows and all platforms)
     port = int(os.environ.get("PORT", 5000))
     debug = os.environ.get("DEBUG", "false").lower() == "true"
+    reload = os.environ.get("RELOAD", "true" if debug else "false").lower() == "true"
+    
+    print(f"Starting server with uvicorn on port {port}...")
+    if reload:
+        print("Auto-reload enabled (restart on code changes)")
+    
     uvicorn.run(
         app,
         host="0.0.0.0",
         port=port,
-        reload=debug,
-        log_level="info" if not debug else "debug"
+        reload=reload,
+        log_level="debug" if debug else "info"
     )

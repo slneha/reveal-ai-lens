@@ -10,14 +10,22 @@ pip install -r requirements.txt
 ```
 
 2. Run the FastAPI server:
+
+**Default (using uvicorn):**
 ```bash
 python main.py
 ```
+This will automatically use uvicorn with auto-reload enabled.
 
-Or using uvicorn directly:
+**Or using uvicorn directly:**
 ```bash
-uvicorn main:app --host 0.0.0.0 --port 5000
+uvicorn backend.main:app --host 0.0.0.0 --port 5000 --reload
 ```
+
+**Environment variables:**
+- `PORT` - Server port (default: 5000)
+- `DEBUG` - Enable debug mode with detailed logging (default: false)
+- `RELOAD` - Enable auto-reload on code changes (default: true, or follows DEBUG setting)
 
 The API will start on `http://localhost:5000`
 
