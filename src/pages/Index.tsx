@@ -23,6 +23,7 @@ const Index = () => {
   const [showUncertainty, setShowUncertainty] = useState(false);
   const { toast } = useToast();
 
+
   interface FeatureSummary {
     name: string;
     value: number;
@@ -80,37 +81,6 @@ const Index = () => {
   };
 
 
-  const analyzeText = async (text: string) => {
-    try {
-      const response = await fetch(`${API_URL}/api/analyze`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          text: text,
-          max_length: 512,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`API error: ${response.statusText}`);
-      }
-
-      const result = await response.json();
-
-      // Store words and spans from API
-      setWords(result.words || []);
-      setSpans(result.spans || []);
-      setConfidence(result.p_ai);
-
-      return result;
-    } catch (error) {
-      console.error("Analysis error:", error);
-      throw error;
-    }
-  };
-
   const handleAnalyze = async () => {
     if (!inputText.trim()) {
       toast({
@@ -124,15 +94,28 @@ const Index = () => {
     setIsAnalyzing(true);
     setHasAnalyzed(false);
 
-    // Normalize text formatting before analysis
     const normalizedText = normalizeText(inputText);
-    
-    // Update input with normalized text
     setInputText(normalizedText);
 
     // Call API
     try {
-      const result = await analyzeText(normalizedText);
+      const response = await fetch(`${API_URL}/api/analyze`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          text: normalizedText,
+          top_k: 20,
+          max_length: 512,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`API error: ${response.status}`);
+      }
+
+      const result = await response.json();
       
       // Store words and spans
       setWords(result.words || []);
@@ -207,9 +190,12 @@ const Index = () => {
       }
     } catch (error) {
       setIsAnalyzing(false);
+      console.error("Analysis error:", error);
       toast({
         title: "Analysis failed",
-        description: "Could not connect to backend API. Please make sure the FastAPI server is running on port 5000.",
+        description: error instanceof Error 
+          ? error.message 
+          : "Could not connect to backend API. Please make sure the FastAPI server is running on port 5000.",
         variant: "destructive",
       });
     }
@@ -259,10 +245,7 @@ const Index = () => {
                     Analyzing...
                   </>
                 ) : (
-                  <>
-                    <Sparkles className="w-4 h-4 mr-2" />
-                    Analyze Text
-                  </>
+                  "Analyze Text"
                 )}
               </Button>
             </div>
