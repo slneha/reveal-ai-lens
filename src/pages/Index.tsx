@@ -86,12 +86,6 @@ const Index = () => {
         score: 0,
       }));
 
-  const mapSentences = (items?: { text: string; score?: number }[]) =>
-    (items ?? []).map((sentence) => ({
-      text: sentence.text,
-      score: (Math.max(0, Math.min(sentence.score ?? 0, 1)) * 2) - 1,
-    }));
-
   const buildFallbackSentences = (text: string) =>
     text
       .split(/[.!?]+/)

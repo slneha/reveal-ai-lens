@@ -37,9 +37,7 @@ These correlated variables were incorporated into the interpretability layer to 
 
 ---
 
-## Why Gradients Instead of Attention
-
-Attention weights do not correspond directly to the final classification and are not class-specific.  
+## Why Gradients 
 The explanation framework uses:
 
 ‖ ∂(logit_AI) / ∂(embedding(token)) ‖
