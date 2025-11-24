@@ -17,7 +17,6 @@ export interface TokenData {
   text: string;
   score: number;        // expected in [0, 1]
   features: string[];   // e.g. ["lexical_complexity", "burstiness"]
-  signed_score?: number;
 }
 
 export interface SentenceInfo {
@@ -36,11 +35,6 @@ interface AnalysisOutputProps {
   showUncertainty: boolean;
   sensitivity: number;          // 0–1 threshold
   prediction: number;           // 0 = human, 1 = AI
-  showOpposing: boolean;
-  wordSupportAI?: number[];
-  wordSupportHuman?: number[];
-  wordSaliencyAI?: number[];
-  wordSaliencyHuman?: number[];
 }
 
 export const AnalysisOutput = ({
@@ -51,11 +45,6 @@ export const AnalysisOutput = ({
   showUncertainty,
   sensitivity,
   prediction,
-  showOpposing,
-  wordSupportAI,
-  wordSupportHuman,
-  wordSaliencyAI,
-  wordSaliencyHuman,
 }: AnalysisOutputProps) => {
   const [hoveredSpan, setHoveredSpan] = useState<SpanData | null>(null);
   const [tooltipPosition, setTooltipPosition] = useState({ x: 0, y: 0 });
@@ -82,55 +71,48 @@ export const AnalysisOutput = ({
     );
   };
 
-  const effectivePrediction = showOpposing ? (prediction === 1 ? 0 : 1) : prediction;
-  const targetIsAI = effectivePrediction === 1;
-  const highlightVar = targetIsAI ? "--ai-like" : "--human-like";
-  const highlightColor = `hsl(var(${highlightVar}))`;
-
+  // Get importance score for a word, preferring tokens[] if provided
   const getWordImportance = (index: number): number => {
-    // Use gradient-based saliency directly (class-specific)
-    const saliency = targetIsAI ? wordSaliencyAI : wordSaliencyHuman;
-    if (saliency && saliency[index] !== undefined) {
-      return Math.max(0, Math.min(saliency[index] ?? 0, 1));
-    }
-
-    // Fallback: Use word support arrays
-    const support = targetIsAI ? wordSupportAI : wordSupportHuman;
-    if (support && support[index] !== undefined) {
-      return Math.max(0, Math.min(support[index] ?? 0, 1));
-    }
-
-    // Last resort: Use token scores
     if (tokens && tokens[index]) {
-      const fallbackScore = Math.max(0, Math.min(tokens[index].score ?? 0, 1));
-      return fallbackScore;
+      const s = tokens[index].score;
+      // ensure it's clamped to [0, 1]
+      return Math.max(0, Math.min(s, 1));
     }
 
-    return 0;
+    // Fallback: infer from spans if tokens not available
+    const topSpan = getTopSpanAtWord(index);
+    if (!topSpan) return 0;
+
+    // If your span scores are unnormalized, lightly normalize
+    const raw = topSpan.score;
+    const normalized = raw <= 1 ? raw : raw / 10.0;
+    return Math.max(0, Math.min(normalized, 1));
   };
 
+  const isAI = prediction === 1;
+  const highlightVar = isAI ? "--ai-like" : "--human-like";
+  const highlightColor = `hsl(var(${highlightVar}))`;
+
   const getWordStyle = (index: number) => {
-    // Handle whitespace-only words (no highlighting needed)
-    const word = words[index];
-    if (word && /^\s+$/.test(word)) {
-      return {}; // No styling for whitespace
-    }
-    
     const importance = getWordImportance(index);
     const spacingOnly: CSSProperties = {
       marginRight: "0.35rem",
     };
 
     if (importance < sensitivity) {
+      // Below threshold → keep spacing so words don't collapse together
       return spacingOnly;
     }
 
     const topSpan = getTopSpanAtWord(index);
-    // Increase opacity for better visibility: scale from 0.3 to 0.85 based on importance
-    const minOpacity = 0.3;
-    const maxOpacity = 0.85;
-    const opacity = minOpacity + (importance * (maxOpacity - minOpacity));
 
+    // Base AI-like highlight: stronger importance → deeper color
+    const opacity = Math.min(importance * 0.45, 0.7);
+
+    // Optional uncertainty accent: words just above threshold
+    // are considered "borderline" and get a yellow hint when toggled on
+
+    
     const isBorderline =
       showUncertainty &&
       importance >= sensitivity &&
@@ -138,20 +120,21 @@ export const AnalysisOutput = ({
 
     const baseStyle: CSSProperties = {
       backgroundColor: `hsl(var(${highlightVar}) / ${opacity})`,
-      color: "inherit", // Keep text white for visibility
+      color: importance > 0.7 ? highlightColor : "inherit",
       padding: "0.125rem 0.25rem",
       borderRadius: "0.25rem",
       cursor: topSpan ? "pointer" : "default",
       transition: "box-shadow 0.2s ease, background-color 0.2s ease",
       marginRight: "0.35rem",
-      fontWeight: importance > 0.6 ? "500" : "normal",
     };
 
     if (isBorderline) {
-      baseStyle.border = "1px dashed rgb(234, 179, 8)";
-      baseStyle.backgroundColor = "rgba(234, 179, 8, 0.20)";
-      baseStyle.boxShadow = "none";
+      // Match legend: border-dashed border-yellow-500 bg-yellow-500/20
+      baseStyle.border = "1px dashed rgb(234, 179, 8)";             // border-yellow-500
+      baseStyle.backgroundColor = "rgba(234, 179, 8, 0.20)";        // bg-yellow-500/20
+      baseStyle.boxShadow = "none";                                 // remove AI glow
     }
+
 
     return baseStyle;
   };
@@ -166,29 +149,21 @@ export const AnalysisOutput = ({
 
   return (
     <div className="relative">
-      <div className="prose prose-invert max-w-none text-foreground leading-relaxed whitespace-pre-wrap">
-        {words.map((word, index) => {
-          // Handle whitespace-only words (newlines, spaces, etc.)
-          const isWhitespace = /^\s+$/.test(word);
-          if (isWhitespace) {
-            return <span key={index} className="whitespace-pre">{word}</span>;
-          }
-          
-          return (
-            <span
-              key={index}
-              className="inline-block hover:shadow-lg"
-              style={getWordStyle(index)}
-              onMouseEnter={(e) => handleMouseEnter(index, e)}
-              onMouseLeave={() => setHoveredSpan(null)}
-              onMouseMove={(e) =>
-                setTooltipPosition({ x: e.clientX, y: e.clientY })
-              }
-            >
-              {word}
-            </span>
-          );
-        })}
+      <div className="prose prose-invert max-w-none text-foreground leading-relaxed">
+        {words.map((word, index) => (
+          <span
+            key={index}
+            className="inline-block hover:shadow-lg"
+            style={getWordStyle(index)}
+            onMouseEnter={(e) => handleMouseEnter(index, e)}
+            onMouseLeave={() => setHoveredSpan(null)}
+            onMouseMove={(e) =>
+              setTooltipPosition({ x: e.clientX, y: e.clientY })
+            }
+          >
+            {word}{" "}
+          </span>
+        ))}
       </div>
 
 
@@ -196,7 +171,7 @@ export const AnalysisOutput = ({
         <TokenTooltip
           span={hoveredSpan}
           position={tooltipPosition}
-          prediction={effectivePrediction}
+          prediction={prediction}
         />
       )}
     </div>

@@ -9,12 +9,68 @@ This backend provides AI text detection with explainability using a RoBERTa-base
 pip install -r requirements.txt
 ```
 
-2. Run the Flask server:
+2. Run the FastAPI server:
 ```bash
 python main.py
 ```
 
+Or using uvicorn directly:
+```bash
+uvicorn main:app --host 0.0.0.0 --port 5000
+```
+
 The API will start on `http://localhost:5000`
+
+You can also access the interactive API documentation at `http://localhost:5000/docs`
+
+## Troubleshooting
+
+### Backend not responding
+
+1. **Check if the backend is running:**
+   ```bash
+   # Test the health endpoint
+   curl http://localhost:5000/health
+   # Should return: {"status":"healthy"}
+   ```
+
+2. **Check if the port is available:**
+   ```bash
+   # On Windows
+   netstat -ano | findstr :5000
+   # On Linux/Mac
+   lsof -i :5000
+   ```
+
+3. **Verify model loading:**
+   - Check the console output when starting the server
+   - You should see "Loading AI detector model..." followed by "Model loaded successfully!"
+   - If you see errors, make sure all dependencies are installed
+
+4. **Test the API directly:**
+   ```bash
+   # Test the analyze endpoint
+   curl -X POST http://localhost:5000/api/analyze \
+     -H "Content-Type: application/json" \
+     -d '{"text": "This is a test sentence."}'
+   ```
+
+### Frontend connection issues
+
+1. **Set the API URL:**
+   - Create a `.env` file in the project root with:
+     ```
+     VITE_API_URL=http://localhost:5000
+     ```
+   - Or the frontend will default to `http://localhost:5000`
+
+2. **Check CORS:**
+   - The backend is configured to allow all origins (`*`)
+   - If you still have CORS issues, check the browser console
+
+3. **Verify both servers are running:**
+   - Backend: `python backend/main.py` (should be on port 5000)
+   - Frontend: `npm run dev` (should be on port 8080)
 
 ## API Endpoints
 

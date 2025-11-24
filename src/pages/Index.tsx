@@ -8,21 +8,19 @@ import { AnalysisOutput, SpanData, TokenData } from "@/components/AnalysisOutput
 import { ControlPanel } from "@/components/ControlPanel";
 import { SummaryPanel } from "@/components/SummaryPanel";
 import { useToast } from "@/hooks/use-toast";
+import { API_URL } from "@/config";
 
 const Index = () => {
   const [inputText, setInputText] = useState("");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [hasAnalyzed, setHasAnalyzed] = useState(false);
   const [confidence, setConfidence] = useState(0.5);
-  const [pHuman, setPHuman] = useState<number | undefined>(undefined);
   const [words, setWords] = useState<string[]>([]);
   const [spans, setSpans] = useState<SpanData[]>([]);
-  const [spansOpposing, setSpansOpposing] = useState<SpanData[]>([]);
   const [tokens, setTokens] = useState<TokenData[]>([]);
   const [prediction, setPrediction] = useState<0 | 1>(1);
   const [sensitivity, setSensitivity] = useState(0.3);
   const [showUncertainty, setShowUncertainty] = useState(false);
-  const [showOpposing, setShowOpposing] = useState(false);
   const { toast } = useToast();
 
   interface FeatureSummary {
@@ -65,26 +63,6 @@ const Index = () => {
 
   const [featureSummaries, setFeatureSummaries] = useState<FeatureSummary[]>(defaultFeatures);
   const [sentenceSummaries, setSentenceSummaries] = useState<SentenceSummary[]>([]);
-  const [sentenceSummariesOpposing, setSentenceSummariesOpposing] = useState<SentenceSummary[]>([]);
-  const [wordSupportAI, setWordSupportAI] = useState<number[]>([]);
-  const [wordSupportHuman, setWordSupportHuman] = useState<number[]>([]);
-  const [wordSaliencyAI, setWordSaliencyAI] = useState<number[]>([]);
-  const [wordSaliencyHuman, setWordSaliencyHuman] = useState<number[]>([]);
-
-  const mapSentences = (items?: { text: string; score?: number }[]) =>
-    (items ?? []).map((sentence) => ({
-      text: sentence.text,
-      score: (Math.max(0, Math.min(sentence.score ?? 0, 1)) * 2) - 1,
-    }));
-
-  const buildFallbackSentences = (text: string) =>
-    text
-      .split(/[.!?]+/)
-      .filter((s) => s.trim())
-      .map((sentence) => ({
-        text: sentence.trim(),
-        score: 0,
-      }));
 
   const normalizeText = (text: string): string => {
     return text
@@ -104,7 +82,7 @@ const Index = () => {
 
   const analyzeText = async (text: string) => {
     try {
-      const response = await fetch("http://localhost:5000/api/analyze", {
+      const response = await fetch(`${API_URL}/api/analyze`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -120,6 +98,12 @@ const Index = () => {
       }
 
       const result = await response.json();
+
+      // Store words and spans from API
+      setWords(result.words || []);
+      setSpans(result.spans || []);
+      setConfidence(result.p_ai);
+
       return result;
     } catch (error) {
       console.error("Analysis error:", error);
@@ -149,17 +133,8 @@ const Index = () => {
     // Call real API
     try {
       const result = await analyzeText(normalizedText);
-      setWords(result.words || []);
-      setSpans(result.spans || []);
-      setSpansOpposing(result.spans_opposing || []);
-      setConfidence(result.p_ai ?? 0.5);
-      setPHuman(result.p_human !== undefined ? result.p_human : undefined);
       setTokens(result.tokens || []);
       setPrediction(result.prediction ?? 1);
-      setWordSupportAI(result.word_support_ai || []);
-      setWordSupportHuman(result.word_support_human || []);
-      setWordSaliencyAI(result.word_saliency_ai || []);
-      setWordSaliencyHuman(result.word_saliency_human || []);
 
       const impacts: BackendImpact[] = Array.isArray(result.feature_impacts) ? result.feature_impacts : [];
       if (impacts.length > 0) {
@@ -195,15 +170,24 @@ const Index = () => {
         setFeatureSummaries(fallback);
       }
 
-      const fallbackSentences = buildFallbackSentences(normalizedText);
-      const backendSentences = mapSentences(result?.sentences);
-      setSentenceSummaries(
-        backendSentences.length > 0 ? backendSentences : fallbackSentences
-      );
-      const backendSentencesOpposing = mapSentences(result?.sentences_opposing);
-      setSentenceSummariesOpposing(
-        backendSentencesOpposing.length > 0 ? backendSentencesOpposing : fallbackSentences
-      );
+      const backendSentences: SentenceSummary[] =
+        (result?.sentences ?? []).map((sentence: { text: string; score: number }) => ({
+          text: sentence.text,
+          score: sentence.score * 2 - 1,
+        })) || [];
+
+      if (backendSentences.length > 0) {
+        setSentenceSummaries(backendSentences);
+      } else {
+        const fallbackSentences = normalizedText
+          .split(/[.!?]+/)
+          .filter((s) => s.trim())
+          .map((sentence) => ({
+            text: sentence.trim(),
+            score: 0,
+          }));
+        setSentenceSummaries(fallbackSentences);
+      }
       setIsAnalyzing(false);
       setHasAnalyzed(true);
       
@@ -217,7 +201,7 @@ const Index = () => {
       setIsAnalyzing(false);
       toast({
         title: "Analysis failed",
-        description: "Could not connect to backend API. Make sure the Flask server is running on port 5000.",
+        description: "Could not connect to backend API. Please try again later.",
         variant: "destructive",
       });
     }
@@ -229,9 +213,6 @@ const Index = () => {
       description: "Your analysis report is being generated...",
     });
   };
-
-  const activeSpans = showOpposing ? spansOpposing : spans;
-  const activeSentences = showOpposing ? sentenceSummariesOpposing : sentenceSummaries;
 
   return (
     <div className="min-h-screen bg-background">
@@ -307,23 +288,17 @@ const Index = () => {
             {hasAnalyzed && (
               <div className="min-h-[500px] space-y-4">
                 <ConfidenceGauge 
-                  score={confidence}
-                  pHuman={pHuman}
+                  score={confidence} 
                   isAnalyzing={isAnalyzing}
                 />
                 <div className="p-4 bg-secondary rounded-lg max-h-[400px] overflow-y-auto">
                   <AnalysisOutput
                     words={words}
-                    spans={activeSpans}
+                    spans={spans}
                     tokens={tokens}
                     showUncertainty={showUncertainty}
                     sensitivity={sensitivity}
                     prediction={prediction}
-                    showOpposing={showOpposing}
-                    wordSupportAI={wordSupportAI}
-                    wordSupportHuman={wordSupportHuman}
-                    wordSaliencyAI={wordSaliencyAI}
-                    wordSaliencyHuman={wordSaliencyHuman}
                   />
                 </div>
               </div>
@@ -334,10 +309,7 @@ const Index = () => {
         {hasAnalyzed && (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <div className="lg:col-span-2">
-              <SummaryPanel 
-                features={featureSummaries} 
-                sentences={activeSentences}
-              />
+              <SummaryPanel features={featureSummaries} sentences={sentenceSummaries} />
             </div>
             <div>
               <ControlPanel
@@ -345,8 +317,6 @@ const Index = () => {
                 onSensitivityChange={setSensitivity}
                 showUncertainty={showUncertainty}
                 onShowUncertaintyChange={setShowUncertainty}
-                showOpposing={showOpposing}
-                onShowOpposingChange={setShowOpposing}
                 onExport={handleExport}
                 prediction={prediction}
               />
