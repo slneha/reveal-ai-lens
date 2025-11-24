@@ -86,15 +86,6 @@ const Index = () => {
         score: 0,
       }));
 
-  const buildFallbackSentences = (text: string) =>
-    text
-      .split(/[.!?]+/)
-      .filter((s) => s.trim())
-      .map((sentence) => ({
-        text: sentence.trim(),
-        score: 0,
-      }));
-
   const normalizeText = (text: string): string => {
     return text
       .trim()
