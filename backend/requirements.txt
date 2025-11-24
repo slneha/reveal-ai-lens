@@ -1,6 +1,6 @@
 flask==3.0.0
 flask-cors==4.0.0
 torch
-transformers==4.35.0
-numpy==1.24.3
-pandas==2.1.0
+transformers
+numpy
+pandas
