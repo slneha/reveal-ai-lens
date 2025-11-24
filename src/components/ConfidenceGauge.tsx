@@ -3,13 +3,9 @@ import { useEffect, useState } from "react";
 interface ConfidenceGaugeProps {
   score: number; // 0-1 range, where 0 is human, 1 is AI
   isAnalyzing?: boolean;
-  modelClassification?: {
-    model: string;
-    confidence: number;
-  };
 }
 
-export const ConfidenceGauge = ({ score, isAnalyzing, modelClassification }: ConfidenceGaugeProps) => {
+export const ConfidenceGauge = ({ score, isAnalyzing }: ConfidenceGaugeProps) => {
   const [animatedScore, setAnimatedScore] = useState(0);
 
   useEffect(() => {
@@ -19,69 +15,46 @@ export const ConfidenceGauge = ({ score, isAnalyzing, modelClassification }: Con
     return () => clearTimeout(timer);
   }, [score]);
 
-  const percentage = Math.round(score * 100);
-  const isAiLikely = score > 0.5;
-  
-  const getGradientStop = () => {
-    return `${percentage}%`;
-  };
+  const aiPercentage = Math.round(score * 100);
+  const humanPercentage = 100 - aiPercentage;
 
   return (
     <div className="w-full space-y-4 animate-fade-in">
-      {modelClassification && (
-        <div className="p-4 bg-secondary/50 rounded-lg border border-border">
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="text-sm font-medium text-foreground">Detected Model</h3>
-            <span className="text-xs text-muted-foreground">
-              {Math.round(modelClassification.confidence * 100)}% confidence
-            </span>
-          </div>
-          <div className="text-2xl font-bold bg-gradient-primary bg-clip-text text-transparent">
-            {modelClassification.model}
-          </div>
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="text-lg font-semibold text-foreground">Detection Results</h3>
+      </div>
+
+      <div className="flex gap-4 mb-2">
+        <div className="flex-1 text-center">
+          <div className="text-3xl font-bold text-human-like mb-1">{humanPercentage}%</div>
+          <div className="text-sm text-muted-foreground">Human</div>
         </div>
-      )}
-      
-      <div className="flex items-center justify-between">
-        <h3 className="text-lg font-semibold text-foreground">AI Detection Confidence</h3>
-        <div className="flex items-center gap-2">
-          <span className={`text-2xl font-bold ${isAiLikely ? "text-ai-like" : "text-human-like"}`}>
-            {percentage}%
-          </span>
-          <span className="text-sm text-muted-foreground">
-            {isAiLikely ? "AI-like" : "Human-like"}
-          </span>
+        <div className="flex-1 text-center">
+          <div className="text-3xl font-bold text-ai-like mb-1">{aiPercentage}%</div>
+          <div className="text-sm text-muted-foreground">AI</div>
         </div>
       </div>
 
-      <div className="relative h-4 overflow-hidden rounded-full bg-secondary">
+      <div className="relative h-6 overflow-hidden rounded-full bg-secondary flex">
         <div
-          className="h-full transition-all duration-1000 ease-out"
-          style={{
-            width: getGradientStop(),
-            background: "linear-gradient(90deg, hsl(var(--human-like)), hsl(60 100% 50%), hsl(var(--ai-like)))",
-            backgroundSize: "200% 100%",
-            backgroundPosition: `${100 - percentage}% 0`,
-          }}
-        />
+          className="h-full transition-all duration-1000 ease-out bg-human-like flex items-center justify-end pr-2"
+          style={{ width: `${humanPercentage}%` }}
+        >
+          {humanPercentage > 10 && (
+            <span className="text-xs font-semibold text-white">{humanPercentage}%</span>
+          )}
+        </div>
+        <div
+          className="h-full transition-all duration-1000 ease-out bg-ai-like flex items-center justify-start pl-2"
+          style={{ width: `${aiPercentage}%` }}
+        >
+          {aiPercentage > 10 && (
+            <span className="text-xs font-semibold text-white">{aiPercentage}%</span>
+          )}
+        </div>
         {isAnalyzing && (
           <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent animate-shimmer" />
         )}
-      </div>
-
-      <div className="flex justify-between text-xs text-muted-foreground">
-        <span className="flex items-center gap-1">
-          <div className="h-2 w-2 rounded-full bg-human-like" />
-          Human-like
-        </span>
-        <span className="flex items-center gap-1">
-          <div className="h-2 w-2 rounded-full bg-neutral" />
-          Neutral
-        </span>
-        <span className="flex items-center gap-1">
-          <div className="h-2 w-2 rounded-full bg-ai-like" />
-          AI-like
-        </span>
       </div>
     </div>
   );

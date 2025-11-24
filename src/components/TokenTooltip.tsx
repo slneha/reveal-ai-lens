@@ -1,18 +1,30 @@
-import { TokenData } from "./AnalysisOutput";
-import { TrendingUp, TrendingDown } from "lucide-react";
+import { SpanData } from "./AnalysisOutput";
+import { TrendingUp } from "lucide-react";
 
 interface TokenTooltipProps {
-  token: TokenData;
+  span: SpanData;
   position: { x: number; y: number };
 }
 
-export const TokenTooltip = ({ token, position }: TokenTooltipProps) => {
-  const isAiLike = token.score > 0;
-  const scorePercentage = Math.abs(Math.round(token.score * 100));
+export const TokenTooltip = ({ span, position }: TokenTooltipProps) => {
+  const scorePercentage = Math.round(Math.min(span.score / 10.0, 1.0) * 100);
+
+  const getFeatureLabel = (feature: string) => {
+    switch (feature) {
+      case "lexical_complexity":
+        return "Lexical Complexity";
+      case "formality":
+        return "Formality";
+      case "burstiness":
+        return "Burstiness";
+      default:
+        return feature;
+    }
+  };
 
   return (
     <div
-      className="fixed z-50 w-72 p-4 bg-popover border border-border rounded-lg shadow-card animate-scale-in"
+      className="fixed z-50 w-80 p-4 bg-popover border border-border rounded-lg shadow-card animate-scale-in"
       style={{
         left: `${position.x + 10}px`,
         top: `${position.y + 10}px`,
@@ -22,56 +34,58 @@ export const TokenTooltip = ({ token, position }: TokenTooltipProps) => {
       <div className="space-y-3">
         <div className="flex items-start justify-between">
           <div className="flex-1">
-            <div className="font-mono text-sm text-muted-foreground mb-1">Token Analysis</div>
-            <div className="font-semibold text-foreground break-words">"{token.text}"</div>
+            <div className="font-mono text-xs text-muted-foreground mb-1">Detected Span</div>
+            <div className="font-semibold text-foreground break-words">"{span.text}"</div>
           </div>
-          {isAiLike ? (
-            <TrendingUp className="w-5 h-5 text-ai-like flex-shrink-0 ml-2" />
-          ) : (
-            <TrendingDown className="w-5 h-5 text-human-like flex-shrink-0 ml-2" />
-          )}
+          <TrendingUp className="w-5 h-5 text-ai-like flex-shrink-0 ml-2" />
         </div>
 
         <div className="space-y-2">
           <div className="flex items-center justify-between text-sm">
-            <span className="text-muted-foreground">Likelihood:</span>
-            <span className={`font-semibold ${isAiLike ? "text-ai-like" : "text-human-like"}`}>
-              {scorePercentage}% {isAiLike ? "AI" : "Human"}
+            <span className="text-muted-foreground">AI Contribution:</span>
+            <span className="font-semibold text-ai-like">
+              {scorePercentage}%
             </span>
           </div>
 
           <div className="flex items-center justify-between text-sm">
-            <span className="text-muted-foreground">Uncertainty:</span>
-            <span className="font-medium">±{Math.round(token.uncertainty * 100)}%</span>
+            <span className="text-muted-foreground">Score:</span>
+            <span className="font-medium">{span.score.toFixed(2)}</span>
           </div>
         </div>
 
         <div className="pt-2 border-t border-border">
-          <div className="text-xs font-semibold text-muted-foreground mb-2">Top Contributing Features:</div>
-          <div className="space-y-2">
-            {token.features.slice(0, 3).map((feature, idx) => (
-              <div key={idx} className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium text-foreground">{feature.name}</span>
-                  <span className="text-xs text-muted-foreground">{Math.abs(feature.value).toFixed(2)}</span>
-                </div>
-                <div className="h-1 bg-secondary rounded-full overflow-hidden">
-                  <div
-                    className={`h-full ${feature.value > 0 ? "bg-ai-like" : "bg-human-like"}`}
-                    style={{ width: `${Math.abs(feature.value) * 100}%` }}
-                  />
-                </div>
-                <p className="text-xs text-muted-foreground">{feature.description}</p>
-              </div>
-            ))}
+          <div className="text-xs font-semibold text-muted-foreground mb-2">Dominant Feature</div>
+          <div className="p-2 bg-secondary/50 rounded">
+            <div className="font-medium text-sm text-foreground mb-1">
+              {getFeatureLabel(span.dom_feature)}
+            </div>
+            <p className="text-xs text-muted-foreground">{span.reason}</p>
           </div>
         </div>
 
-        {token.uncertainty > 0.3 && (
+        {(span.lex_contrib !== undefined || span.form_contrib !== undefined || span.burst_contrib !== undefined) && (
           <div className="pt-2 border-t border-border">
-            <div className="flex items-start gap-2 text-xs text-muted-foreground">
-              <span className="text-yellow-500">⚠️</span>
-              <span>High uncertainty detected. This prediction may be less reliable.</span>
+            <div className="text-xs font-semibold text-muted-foreground mb-2">Feature Contributions:</div>
+            <div className="space-y-1.5 text-xs">
+              {span.lex_contrib !== undefined && (
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Lexical:</span>
+                  <span className="font-medium">{span.lex_contrib.toFixed(3)}</span>
+                </div>
+              )}
+              {span.form_contrib !== undefined && (
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Formality:</span>
+                  <span className="font-medium">{span.form_contrib.toFixed(3)}</span>
+                </div>
+              )}
+              {span.burst_contrib !== undefined && (
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Burstiness:</span>
+                  <span className="font-medium">{span.burst_contrib.toFixed(3)}</span>
+                </div>
+              )}
             </div>
           </div>
         )}

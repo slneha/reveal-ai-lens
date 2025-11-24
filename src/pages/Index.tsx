@@ -4,7 +4,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Card } from "@/components/ui/card";
 import { Loader2, Sparkles } from "lucide-react";
 import { ConfidenceGauge } from "@/components/ConfidenceGauge";
-import { AnalysisOutput, TokenData } from "@/components/AnalysisOutput";
+import { AnalysisOutput, SpanData } from "@/components/AnalysisOutput";
 import { ControlPanel } from "@/components/ControlPanel";
 import { SummaryPanel } from "@/components/SummaryPanel";
 import { useToast } from "@/hooks/use-toast";
@@ -14,14 +14,10 @@ const Index = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [hasAnalyzed, setHasAnalyzed] = useState(false);
   const [confidence, setConfidence] = useState(0.5);
-  const [tokens, setTokens] = useState<TokenData[]>([]);
-  const [sensitivity, setSensitivity] = useState(0.2);
-  const [showHumanLike, setShowHumanLike] = useState(true);
+  const [words, setWords] = useState<string[]>([]);
+  const [spans, setSpans] = useState<SpanData[]>([]);
+  const [sensitivity, setSensitivity] = useState(0.3);
   const [showUncertainty, setShowUncertainty] = useState(false);
-  const [granularity, setGranularity] = useState(1);
-  const [analysisMode, setAnalysisMode] = useState<'words' | 'sentences'>('words');
-  const [showPunctuation, setShowPunctuation] = useState(false);
-  const [modelClassification, setModelClassification] = useState<{ model: string; confidence: number } | null>(null);
   const { toast } = useToast();
 
   const normalizeText = (text: string): string => {
@@ -39,20 +35,6 @@ const Index = () => {
       .replace(/[\u200B-\u200D\uFEFF]/g, '');
   };
 
-  const classifyModelFromScores = (scores: any): string => {
-    const { lexical_complexity, formality, burstiness } = scores;
-    
-    if (formality > 0.7 && lexical_complexity > 0.6) {
-      return "Claude";
-    } else if (burstiness > 0.7 && formality < 0.5) {
-      return "GPT-4";
-    } else if (lexical_complexity > 0.7) {
-      return "Copilot";
-    } else if (formality > 0.6) {
-      return "Gemini";
-    }
-    return "GPT-3.5";
-  };
 
   const analyzeText = async (text: string) => {
     try {
@@ -63,7 +45,6 @@ const Index = () => {
         },
         body: JSON.stringify({
           text: text,
-          top_k: 3,
           max_length: 512,
         }),
       });
@@ -74,56 +55,10 @@ const Index = () => {
 
       const result = await response.json();
 
-      // Convert words to token format with gradient scores
-      const apiTokens: TokenData[] = result.words.map((word: string, idx: number) => {
-        // Find if this word is in any span for scoring
-        let score = 0;
-        let spanFeature = null;
-        
-        for (const span of result.spans) {
-          if (span.text.includes(word)) {
-            score = Math.min(span.score / 10.0, 1.0);
-            spanFeature = span.dom_feature;
-            break;
-          }
-        }
-
-        // Convert to [-1, 1] range for display (AI-like = positive, human-like = negative)
-        const displayScore = (score - 0.5) * 2;
-
-        return {
-          text: word,
-          score: displayScore,
-          uncertainty: Math.random() * 0.3,
-          features: [
-            {
-              name: "Lexical Complexity",
-              value: result.global_scores.lexical_complexity * 2 - 1,
-              description: "Long and technical vocabulary usage",
-            },
-            {
-              name: "Formality",
-              value: result.global_scores.formality * 2 - 1,
-              description: "Formal, academic-style language patterns",
-            },
-            {
-              name: "Burstiness",
-              value: result.global_scores.burstiness * 2 - 1,
-              description: "Uniformity in sentence length and rhythm",
-            },
-          ],
-        };
-      });
-
-      setTokens(apiTokens);
+      // Store words and spans from API
+      setWords(result.words || []);
+      setSpans(result.spans || []);
       setConfidence(result.p_ai);
-
-      // Set model classification based on global scores
-      const modelName = classifyModelFromScores(result.global_scores);
-      setModelClassification({
-        model: modelName,
-        confidence: result.p_ai,
-      });
 
       return result;
     } catch (error) {
@@ -288,12 +223,11 @@ const Index = () => {
                 <ConfidenceGauge 
                   score={confidence} 
                   isAnalyzing={isAnalyzing}
-                  modelClassification={modelClassification || undefined}
                 />
                 <div className="p-4 bg-secondary rounded-lg max-h-[400px] overflow-y-auto">
                   <AnalysisOutput
-                    tokens={tokens}
-                    showHumanLike={showHumanLike}
+                    words={words}
+                    spans={spans}
                     showUncertainty={showUncertainty}
                     sensitivity={sensitivity}
                   />
@@ -312,16 +246,8 @@ const Index = () => {
               <ControlPanel
                 sensitivity={sensitivity}
                 onSensitivityChange={setSensitivity}
-                showHumanLike={showHumanLike}
-                onShowHumanLikeChange={setShowHumanLike}
                 showUncertainty={showUncertainty}
                 onShowUncertaintyChange={setShowUncertainty}
-                granularity={granularity}
-                onGranularityChange={setGranularity}
-                analysisMode={analysisMode}
-                onAnalysisModeChange={setAnalysisMode}
-                showPunctuation={showPunctuation}
-                onShowPunctuationChange={setShowPunctuation}
                 onExport={handleExport}
               />
             </div>

@@ -1,106 +1,94 @@
 import { useState } from "react";
 import { TokenTooltip } from "./TokenTooltip";
 
-export interface TokenData {
+export interface SpanData {
+  start: number;
+  end: number;
   text: string;
-  score: number; // -1 to 1, where -1 is human-like, 1 is AI-like
-  features: {
-    name: string;
-    value: number;
-    description: string;
-  }[];
-  uncertainty: number;
+  score: number;
+  dom_feature: string;
+  reason: string;
+  lex_contrib?: number;
+  form_contrib?: number;
+  burst_contrib?: number;
 }
 
 interface AnalysisOutputProps {
-  tokens: TokenData[];
-  showHumanLike: boolean;
+  words: string[];
+  spans: SpanData[];
   showUncertainty: boolean;
   sensitivity: number;
 }
 
 export const AnalysisOutput = ({ 
-  tokens, 
-  showHumanLike, 
+  words,
+  spans,
   showUncertainty,
   sensitivity 
 }: AnalysisOutputProps) => {
-  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  const [hoveredSpan, setHoveredSpan] = useState<SpanData | null>(null);
   const [tooltipPosition, setTooltipPosition] = useState({ x: 0, y: 0 });
 
-  const getTokenColor = (token: TokenData) => {
-    const normalizedScore = Math.abs(token.score);
-    
-    if (normalizedScore < sensitivity) {
-      return "text-neutral";
+  // Create a map of word indices to their spans
+  const wordToSpan = new Map<number, SpanData>();
+  spans.forEach(span => {
+    for (let i = span.start; i < span.end; i++) {
+      if (!wordToSpan.has(i) || wordToSpan.get(i)!.score < span.score) {
+        wordToSpan.set(i, span);
+      }
     }
+  });
 
-    if (token.score > 0) {
-      // AI-like (red spectrum)
-      const opacity = Math.min(normalizedScore * 1.2, 1);
-      return `text-ai-like`;
-    } else {
-      // Human-like (green spectrum)
-      if (!showHumanLike) return "text-foreground";
-      const opacity = Math.min(normalizedScore * 1.2, 1);
-      return `text-human-like`;
-    }
-  };
+  const getWordStyle = (index: number) => {
+    const span = wordToSpan.get(index);
+    if (!span) return {};
 
-  const getBackgroundStyle = (token: TokenData) => {
-    const normalizedScore = Math.abs(token.score);
+    // Normalize score (0-10 range to 0-1)
+    const normalizedScore = Math.min(span.score / 10.0, 1.0);
     
     if (normalizedScore < sensitivity) {
       return {};
     }
 
-    const opacity = Math.min(normalizedScore * 0.3, 0.5);
+    const opacity = Math.min(normalizedScore * 0.4, 0.6);
     
-    if (showUncertainty && token.uncertainty > 0.3) {
-      return {
-        backgroundColor: `hsl(45 100% 50% / ${opacity * 0.5})`,
-        border: "1px dashed hsl(45 100% 50% / 0.5)",
-      };
-    }
-
-    if (token.score > 0) {
-      return {
-        backgroundColor: `hsl(var(--ai-like) / ${opacity})`,
-      };
-    } else if (showHumanLike) {
-      return {
-        backgroundColor: `hsl(var(--human-like) / ${opacity})`,
-      };
-    }
-
-    return {};
+    return {
+      backgroundColor: `hsl(var(--ai-like) / ${opacity})`,
+      color: normalizedScore > 0.5 ? "hsl(var(--ai-like))" : "inherit",
+      padding: "0.125rem 0.25rem",
+      borderRadius: "0.25rem",
+      cursor: "pointer",
+    };
   };
 
   const handleMouseEnter = (index: number, e: React.MouseEvent) => {
-    setHoveredIndex(index);
-    setTooltipPosition({ x: e.clientX, y: e.clientY });
+    const span = wordToSpan.get(index);
+    if (span) {
+      setHoveredSpan(span);
+      setTooltipPosition({ x: e.clientX, y: e.clientY });
+    }
   };
 
   return (
     <div className="relative">
       <div className="prose prose-invert max-w-none text-foreground leading-relaxed">
-        {tokens.map((token, index) => (
+        {words.map((word, index) => (
           <span
             key={index}
-            className={`${getTokenColor(token)} transition-all duration-200 cursor-pointer rounded px-1 py-0.5 hover:shadow-lg relative inline-block`}
-            style={getBackgroundStyle(token)}
+            className="inline-block transition-all duration-200 hover:shadow-lg"
+            style={getWordStyle(index)}
             onMouseEnter={(e) => handleMouseEnter(index, e)}
-            onMouseLeave={() => setHoveredIndex(null)}
+            onMouseLeave={() => setHoveredSpan(null)}
             onMouseMove={(e) => setTooltipPosition({ x: e.clientX, y: e.clientY })}
           >
-            {token.text}
+            {word}{" "}
           </span>
         ))}
       </div>
 
-      {hoveredIndex !== null && (
+      {hoveredSpan && (
         <TokenTooltip
-          token={tokens[hoveredIndex]}
+          span={hoveredSpan}
           position={tooltipPosition}
         />
       )}

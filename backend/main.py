@@ -85,14 +85,13 @@ def analyze_text():
         if not text or not text.strip():
             return jsonify({"error": "Empty text provided"}), 400
         
-        top_k = data.get("top_k", 3)
         max_length = data.get("max_length", 512)
         
-        # Run the explainable analysis
+        # Run the explainable analysis with top_k=20 for comprehensive highlighting
         result = explain_text_with_features(
             text=text,
             max_length=max_length,
-            top_k=top_k
+            top_k=20
         )
         
         # Convert words to token format for frontend compatibility
