@@ -8,3 +8,6 @@ numpy
 pandas
 psutil
 accelerate
+nltk
+joblib
+shap

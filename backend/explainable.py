@@ -28,13 +28,24 @@ Typical workflow in a notebook:
 
 import math
 import re
+import os
 from collections import Counter
-from typing import Dict, List, Tuple, Any
+from typing import Dict, List, Tuple, Any, Optional
 
 import numpy as np
 import pandas as pd
 import torch
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
+
+# Try to import joblib and shap for SHAP-based explainability
+try:
+    import joblib
+    import shap
+    SHAP_AVAILABLE = True
+except ImportError:
+    SHAP_AVAILABLE = False
+    joblib = None
+    shap = None
 
 
 # ============================================================
@@ -46,6 +57,109 @@ MODEL_NAME = "andreas122001/roberta-mixed-detector"
 tokenizer = None  # will be set by load_detector()
 model = None
 device = torch.device("cpu")
+
+# SHAP surrogate model and scaler (loaded on demand)
+_surrogate_model = None
+_feature_scaler = None
+_shap_explainer = None
+
+# Feature order expected by the surrogate model (must match training)
+# Note: punct_em_dash_ratio is included for model compatibility but set to 0 and excluded from display
+SURROGATE_FEATURE_ORDER = [
+    "hedge_ratio",
+    "burstiness",
+    "form_contraction_ratio",
+    "lex_long_word_ratio",
+    "repetition_ratio",
+    "stopword_ratio",
+    "form_first_person_ratio",
+    "lex_avg_word_len",
+    "syn_comma_per_sent",
+    "form_connector_ratio",
+    "syn_avg_sent_len",
+    "punct_em_dash_ratio",  # Required by scaler but not used in display
+]
+
+
+def load_shap_models():
+    """Load the SHAP surrogate model and feature scaler from joblib files."""
+    global _surrogate_model, _feature_scaler, _shap_explainer
+    
+    if not SHAP_AVAILABLE:
+        return False
+    
+    if _surrogate_model is not None:
+        return True  # Already loaded
+    
+    try:
+        backend_dir = os.path.dirname(os.path.abspath(__file__))
+        model_path = os.path.join(backend_dir, "rf_surrogate_model.joblib")
+        scaler_path = os.path.join(backend_dir, "feature_scaler.joblib")
+        
+        if not os.path.exists(model_path) or not os.path.exists(scaler_path):
+            print("Warning: SHAP model files not found, using fallback SHAP weights")
+            return False
+        
+        _surrogate_model = joblib.load(model_path)
+        _feature_scaler = joblib.load(scaler_path)
+        
+        # Create SHAP explainer (TreeExplainer for Random Forest)
+        _shap_explainer = shap.TreeExplainer(_surrogate_model)
+        
+        print("SHAP models loaded successfully")
+        return True
+    except Exception as e:
+        print(f"Warning: Failed to load SHAP models: {e}, using fallback SHAP weights")
+        return False
+
+
+def compute_shap_values(feature_dict: Dict[str, float]) -> Optional[Dict[str, float]]:
+    """
+    Compute SHAP values for a given feature dictionary.
+    
+    Parameters
+    ----------
+    feature_dict : dict
+        Dictionary of feature names to values
+        
+    Returns
+    -------
+    dict or None
+        Dictionary of feature names to SHAP values, or None if models not available
+    """
+    if not load_shap_models() or _surrogate_model is None or _feature_scaler is None:
+        return None
+    
+    try:
+        # Extract features in the correct order
+        feature_array = np.array([
+            feature_dict.get(feat, 0.0) for feat in SURROGATE_FEATURE_ORDER
+        ]).reshape(1, -1)
+        
+        # Scale features
+        scaled_features = _feature_scaler.transform(feature_array)
+        
+        # Compute SHAP values
+        shap_values = _shap_explainer.shap_values(scaled_features)
+        
+        # Handle binary classification (shap_values is a list for each class)
+        # shap_values[0] = SHAP values for class 0 (Human)
+        # shap_values[1] = SHAP values for class 1 (AI)
+        if isinstance(shap_values, list):
+            # Use SHAP values for AI class (class 1)
+            # Positive values push toward AI, negative push toward Human
+            shap_values = shap_values[1]  # Keep sign for direction
+        
+        # Convert to dictionary (shap_values is 2D array: [samples, features])
+        shap_dict = {
+            feat: float(shap_values[0][i])
+            for i, feat in enumerate(SURROGATE_FEATURE_ORDER)
+        }
+        
+        return shap_dict
+    except Exception as e:
+        print(f"Warning: Failed to compute SHAP values: {e}")
+        return None
 
 
 def load_detector(model_name: str = MODEL_NAME, use_gpu: bool = False):
@@ -249,7 +363,18 @@ def _sentences(text: str) -> List[str]:
 
 
 def lexical_features(text: str) -> pd.Series:
-    tokens = _simple_word_tokens(text)
+    """Calculate lexical features matching research implementation."""
+    if not isinstance(text, str) or not text.strip():
+        return pd.Series(
+            {
+                "lex_ttr": 0.0,
+                "lex_avg_word_len": 0.0,
+                "lex_long_word_ratio": 0.0,
+            }
+        )
+    
+    # Use regex to find word tokens (matching research implementation)
+    tokens = re.findall(r"\b\w+\b", text.lower())
     if len(tokens) == 0:
         return pd.Series(
             {
@@ -260,19 +385,18 @@ def lexical_features(text: str) -> pd.Series:
         )
 
     types = set(tokens)
-    ttr = len(types) / len(tokens)
+    ttr = len(types) / len(tokens)  # type-token ratio
 
-    word_lengths = [len(w) for w in tokens]
-    avg_len = float(np.mean(word_lengths))
-
-    long_words = [w for w in tokens if len(w) >= 7]  # threshold 7 chars
-    long_ratio = len(long_words) / len(tokens)
+    avg_word_len = float(np.mean([len(t) for t in tokens]))
+    
+    # Long word ratio: mean of boolean array (7+ chars as "long")
+    long_word_ratio = float(np.mean([len(t) >= 7 for t in tokens]))
 
     return pd.Series(
         {
             "lex_ttr": ttr,
-            "lex_avg_word_len": avg_len,
-            "lex_long_word_ratio": long_ratio,
+            "lex_avg_word_len": avg_word_len,
+            "lex_long_word_ratio": long_word_ratio,
         }
     )
 
@@ -281,8 +405,20 @@ def lexical_features(text: str) -> pd.Series:
 
 
 def syntactic_features(text: str) -> pd.Series:
-    sents = _sentences(text)
-    if len(sents) == 0:
+    """Calculate syntactic features matching research implementation."""
+    if not isinstance(text, str) or not text.strip():
+        return pd.Series(
+            {
+                "syn_avg_sent_len": 0.0,
+                "syn_comma_per_sent": 0.0,
+            }
+        )
+    
+    # Sentence split matching research implementation
+    sentences = re.split(r'[.!?]+', text)
+    sentences = [s.strip() for s in sentences if s.strip()]
+    
+    if len(sentences) == 0:
         return pd.Series(
             {
                 "syn_avg_sent_len": 0.0,
@@ -290,21 +426,17 @@ def syntactic_features(text: str) -> pd.Series:
             }
         )
 
-    sent_lengths = []
-    comma_counts = []
-
-    for s in sents:
-        tokens = _simple_word_tokens(s)
-        sent_lengths.append(len(tokens))
-        comma_counts.append(s.count(","))
-
-    avg_len = float(np.mean(sent_lengths))
-    avg_comma = float(np.mean(comma_counts))
+    # Calculate sentence lengths and comma counts
+    sent_lens = [len(s.split()) for s in sentences]
+    avg_sent_len = float(np.mean(sent_lens))
+    
+    comma_counts = [s.count(",") for s in sentences]
+    avg_commas = float(np.mean(comma_counts))
 
     return pd.Series(
         {
-            "syn_avg_sent_len": avg_len,
-            "syn_comma_per_sent": avg_comma,
+            "syn_avg_sent_len": avg_sent_len,
+            "syn_comma_per_sent": avg_commas,
         }
     )
 
@@ -331,6 +463,7 @@ FIRST_PERSON = {"i", "we", "my", "our", "me", "us"}
 
 
 def formality_features(text: str) -> pd.Series:
+    """Calculate formality features matching research implementation."""
     if not isinstance(text, str) or not text.strip():
         return pd.Series(
             {
@@ -341,7 +474,8 @@ def formality_features(text: str) -> pd.Series:
         )
 
     lower = text.lower()
-    tokens = _simple_word_tokens(text)
+    # Use regex matching research implementation (include contractions)
+    tokens = re.findall(r"\b\w+'\w+|\w+\b", lower)
     if len(tokens) == 0:
         return pd.Series(
             {
@@ -351,23 +485,23 @@ def formality_features(text: str) -> pd.Series:
             }
         )
 
-    # contractions: simple heuristic
+    # Contractions: simple heuristic
     contractions = [t for t in tokens if "'" in t]
     contraction_ratio = len(contractions) / len(tokens)
 
-    # first-person pronouns
-    first_person = [t.lower() for t in tokens if t.lower() in FIRST_PERSON]
+    # First-person pronouns
+    first_person = [t for t in tokens if t in FIRST_PERSON]
     first_person_ratio = len(first_person) / len(tokens)
 
-    # formal connectors by substring per sentence
-    sentences = _sentences(text)
-    if len(sentences) == 0:
-        connector_ratio = 0.0
-    else:
-        connector_count = 0
-        for phrase in FORMAL_CONNECTORS:
-            connector_count += lower.count(phrase)
-        connector_ratio = connector_count / len(sentences)
+    # Formal connectors (check by substring)
+    connector_count = 0
+    for phrase in FORMAL_CONNECTORS:
+        connector_count += lower.count(phrase)
+    
+    # Divide by sentence count
+    sentences = re.split(r'[.!?]+', text) or [text]
+    sentences = [s for s in sentences if s.strip()]
+    connector_ratio = connector_count / max(1, len(sentences))
 
     return pd.Series(
         {
@@ -391,6 +525,72 @@ def compute_burstiness(text: str) -> float:
     return float(np.std(lengths) / np.mean(lengths))
 
 
+# --- additional features: hedge ratio, repetition ratio, stopword ratio ---
+
+# Hedge words - simpler set matching research implementation
+HEDGES = {"maybe", "perhaps", "i think", "i guess", "likely", "probably", "appears", "seems", "suggests"}
+
+# Stopwords - using NLTK-compatible set (fallback if NLTK not available)
+try:
+    from nltk.corpus import stopwords
+    STOP = set(stopwords.words("english"))
+except (ImportError, LookupError):
+    # Fallback to common stopwords if NLTK not available
+    STOP = {
+        "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
+        "of", "with", "by", "from", "as", "is", "was", "are", "were", "been",
+        "be", "have", "has", "had", "do", "does", "did", "will", "would",
+        "should", "could", "may", "might", "must", "can", "this", "that",
+        "these", "those", "i", "you", "he", "she", "it", "we", "they", "me",
+        "him", "her", "us", "them", "my", "your", "his", "her", "its", "our",
+        "their", "what", "which", "who", "whom", "whose", "where", "when",
+        "why", "how", "all", "each", "every", "both", "few", "more", "most",
+        "other", "some", "such", "no", "nor", "not", "only", "own", "same",
+        "so", "than", "too", "very", "just", "now"
+    }
+
+
+def compute_hedge_ratio(text: str) -> float:
+    """Calculate ratio of hedge phrases to total words (matches research implementation)."""
+    if not isinstance(text, str) or not text.strip():
+        return 0.0
+    lower = text.lower()
+    # Count occurrences of hedge phrases in text
+    hedge_count = sum(lower.count(h) for h in HEDGES)
+    # Divide by word count
+    word_count = len(text.split())
+    return float(hedge_count / max(1, word_count))
+
+
+def compute_repetition_ratio(text: str) -> float:
+    """Calculate repetition ratio using bigrams (matches research implementation)."""
+    if not isinstance(text, str) or not text.strip():
+        return 0.0
+    # Use regex to find word tokens
+    tokens = re.findall(r"\b\w+\b", text.lower())
+    if len(tokens) == 0:
+        return 0.0
+    # Create bigrams
+    bigrams = list(zip(tokens, tokens[1:]))
+    if len(bigrams) == 0:
+        return 0.0
+    # Return ratio of bigrams to unique bigrams
+    return float(len(bigrams) / len(set(bigrams)))
+
+
+def compute_stopword_ratio(text: str) -> float:
+    """Calculate ratio of stopwords to total words using NLTK stopwords."""
+    if not isinstance(text, str) or not text.strip():
+        return 0.0
+    # Use regex to find word tokens
+    tokens = re.findall(r"\b\w+\b", text.lower())
+    if len(tokens) == 0:
+        return 0.0
+    # Count stopwords
+    stopword_count = sum(1 for t in tokens if t in STOP)
+    return float(stopword_count / len(tokens))
+
+
 # --- wrapper: add all text-level features to a DataFrame ---
 
 
@@ -404,6 +604,9 @@ def add_text_features(df: pd.DataFrame, text_col: str = "text") -> pd.DataFrame:
     syn = df[text_col].apply(syntactic_features)
     form = df[text_col].apply(formality_features)
     burst = df[text_col].apply(lambda t: compute_burstiness(t))
+    hedge = df[text_col].apply(lambda t: compute_hedge_ratio(t))
+    repetition = df[text_col].apply(lambda t: compute_repetition_ratio(t))
+    stopword = df[text_col].apply(lambda t: compute_stopword_ratio(t))
 
     df = df.copy()
     df[["lex_ttr", "lex_avg_word_len", "lex_long_word_ratio"]] = lex
@@ -412,6 +615,9 @@ def add_text_features(df: pd.DataFrame, text_col: str = "text") -> pd.DataFrame:
         ["form_contraction_ratio", "form_first_person_ratio", "form_connector_ratio"]
     ] = form
     df["burstiness"] = burst
+    df["hedge_ratio"] = hedge
+    df["repetition_ratio"] = repetition
+    df["stopword_ratio"] = stopword
 
     return df
 
@@ -431,15 +637,25 @@ FEATURE_STATS_COLS = [
 FEATURE_STATS: Dict[str, Dict[str, float]] = {}
 
 
-FEATURE_CORRELATIONS: Dict[str, float] = {
-    "lex_long_word_ratio": 0.370235,
-    "lex_avg_word_len": 0.370001,
-    "form_first_person_ratio": 0.147474,
-    "form_contraction_ratio": 0.023141,
-    "syn_avg_sent_len": -0.04263,
-    "syn_comma_per_sent": -0.046974,
-    "burstiness": -0.379292,
+# SHAP Feature Importance Weights (Absolute Contribution)
+# These weights indicate the importance of each feature for AI classification
+# Original values from research - maintaining exact ratios
+SHAP_WEIGHTS: Dict[str, float] = {
+    "hedge_ratio": 1.752148e-01,              # Most important
+    "burstiness": 1.613908e-01,               # Second most important
+    "form_contraction_ratio": 1.416791e-06,
+    "lex_long_word_ratio": 1.250165e-06,
+    "repetition_ratio": 1.241900e-06,
+    "stopword_ratio": 1.068848e-06,
+    "form_first_person_ratio": 9.466221e-07,
+    "lex_avg_word_len": 8.549408e-07,
+    "syn_comma_per_sent": 7.273496e-07,
+    "form_connector_ratio": 6.777564e-07,
+    "syn_avg_sent_len": 1.025801e-07,
 }
+
+# Keep FEATURE_CORRELATIONS for backward compatibility, but use SHAP_WEIGHTS as primary
+FEATURE_CORRELATIONS: Dict[str, float] = SHAP_WEIGHTS.copy()
 
 FEATURE_BASELINES: Dict[str, float] = {
     "lex_long_word_ratio": 0.24,
@@ -1030,9 +1246,17 @@ def explain_text_with_features(
         import gc
         gc.collect()
 
+    # Debug: Log raw logits to verify they're not all zeros or identical
+    print(f"[DEBUG] Raw logits: {logits}")
+    
     probs = torch.softmax(torch.tensor(logits), dim=-1).numpy()
     p_human, p_ai = float(probs[0]), float(probs[1])
     pred = int(np.argmax(probs))  # 0=Human,1=AI
+    
+    # Debug: Log probabilities to verify they're computed correctly
+    print(f"[DEBUG] Computed probabilities - p_human: {p_human:.6f}, p_ai: {p_ai:.6f}, pred: {pred}")
+    print(f"[DEBUG] Probabilities sum: {p_human + p_ai:.6f} (should be ~1.0)")
+    
     del logits, probs
 
     # 2) compute features for this text only
@@ -1040,6 +1264,9 @@ def explain_text_with_features(
     form = formality_features(text)
     syn = syntactic_features(text)
     burst = compute_burstiness(text)
+    hedge = compute_hedge_ratio(text)
+    repetition = compute_repetition_ratio(text)
+    stopword = compute_stopword_ratio(text)
 
     raw_feature_values = {
         "lex_long_word_ratio": float(lex["lex_long_word_ratio"]),
@@ -1050,6 +1277,10 @@ def explain_text_with_features(
         "syn_avg_sent_len": float(syn["syn_avg_sent_len"]),
         "syn_comma_per_sent": float(syn["syn_comma_per_sent"]),
         "burstiness": float(burst),
+        "hedge_ratio": float(hedge),
+        "repetition_ratio": float(repetition),
+        "stopword_ratio": float(stopword),
+        "punct_em_dash_ratio": 0.0,  # Required by scaler but not used in display
     }
 
     normalized_features = {
@@ -1061,37 +1292,152 @@ def explain_text_with_features(
         "syn_avg_sent_len": _clamp01(raw_feature_values["syn_avg_sent_len"] / 40.0),
         "syn_comma_per_sent": _clamp01(raw_feature_values["syn_comma_per_sent"] / 5.0),
         "burstiness": _clamp01(math.tanh(raw_feature_values["burstiness"])),
+        "hedge_ratio": _clamp01(raw_feature_values.get("hedge_ratio", 0.0)),
+        "repetition_ratio": _clamp01(raw_feature_values.get("repetition_ratio", 0.0)),
+        "stopword_ratio": _clamp01(raw_feature_values.get("stopword_ratio", 0.0)),
     }
 
     feature_impacts: List[Dict[str, Any]] = []
-    for key, corr in FEATURE_CORRELATIONS.items():
-        if key == "burstiness":
-            # Local burstiness evidence already covers this signal to avoid duplication
-            continue
-        meta = FEATURE_METADATA.get(
-            key,
-            {
-                "label": key.replace("_", " ").title(),
-                "description": "",
-            },
-        )
-        raw_val = raw_feature_values.get(key, 0.0)
-        deviation = _feature_deviation(key, raw_val)
-        signed_score = corr * deviation
-        feature_impacts.append(
-            {
-                "key": key,
-                "label": meta["label"],
-                "description": meta["description"],
-                "raw_value": raw_val,
-                "deviation": deviation,
-                "correlation": corr,
-                "signed_score": signed_score,
-                "direction": "ai" if signed_score >= 0 else "human",
-                "source": "global",
-            }
-        )
+    
+    # Try to compute actual SHAP values using the surrogate model
+    shap_values = compute_shap_values(raw_feature_values)
+    
+    if shap_values is not None:
+        # Use actual SHAP values from surrogate model
+        for key in SURROGATE_FEATURE_ORDER:
+            if key not in raw_feature_values:
+                continue
+            
+            # Skip punct_em_dash_ratio from display (required by model but not shown)
+            if key == "punct_em_dash_ratio":
+                continue
+                
+            meta = FEATURE_METADATA.get(
+                key,
+                {
+                    "label": key.replace("_", " ").title(),
+                    "description": "",
+                },
+            )
+            raw_val = raw_feature_values.get(key, 0.0)
+            norm_val = normalized_features.get(key, 0.0)
+            shap_value = shap_values.get(key, 0.0)
+            
+            # SHAP value sign indicates direction:
+            # Positive SHAP = pushes toward AI (class 1)
+            # Negative SHAP = pushes toward Human (class 0)
+            # For explainability, show both contributing and opposing factors for clarity
+            if pred == 1:  # AI prediction - explain why it's AI, but also show Human factors
+                if shap_value > 0:
+                    # Contributed to AI prediction
+                    contribution = shap_value
+                    direction = "ai"
+                else:
+                    # Opposed AI prediction (pushed toward Human) - show for clarity
+                    contribution = -shap_value  # Make positive for display
+                    direction = "human"
+            else:  # Human prediction - explain why it's Human, but also show AI factors
+                if shap_value < 0:
+                    # Contributed to Human prediction
+                    contribution = -shap_value  # Flip sign so positive = Human contribution
+                    direction = "human"
+                else:
+                    # Opposed Human prediction (pushed toward AI) - show for clarity
+                    contribution = shap_value
+                    direction = "ai"
+            
+            # Include all features that have meaningful impact (both supporting and opposing)
+            if abs(contribution) > 1e-10:  # Small threshold to filter near-zero contributions
+                feature_impacts.append(
+                    {
+                        "key": key,
+                        "label": meta["label"],
+                        "description": meta["description"],
+                        "raw_value": raw_val,
+                        "normalized_value": norm_val,
+                        "shap_value": shap_value,
+                        "signed_score": contribution,
+                        "direction": direction,
+                        "source": "shap_surrogate",
+                    }
+                )
+    else:
+        # Fallback to SHAP weights if models not available
+        for key, shap_weight in SHAP_WEIGHTS.items():
+            meta = FEATURE_METADATA.get(
+                key,
+                {
+                    "label": key.replace("_", " ").title(),
+                    "description": "",
+                },
+            )
+            raw_val = raw_feature_values.get(key, 0.0)
+            norm_val = normalized_features.get(key, 0.0)
+            
+            # Determine if this feature contributes to current prediction
+            # Most features: high norm_val → AI, low norm_val → Human
+            # Burstiness: low norm_val → AI, high norm_val → Human
+            is_burstiness = key == "burstiness"
+            
+            if pred == 1:  # AI prediction - explain why it's AI, but also show Human factors
+                if is_burstiness:
+                    # Low burstiness contributes to AI, high burstiness to Human
+                    ai_contrib = shap_weight * (1.0 - norm_val)
+                    human_contrib = shap_weight * norm_val
+                    if ai_contrib > human_contrib:
+                        contribution = ai_contrib
+                        direction = "ai"
+                    else:
+                        contribution = human_contrib
+                        direction = "human"
+                else:
+                    # High feature value contributes to AI, low to Human
+                    ai_contrib = shap_weight * norm_val
+                    human_contrib = shap_weight * (1.0 - norm_val)
+                    if ai_contrib > human_contrib:
+                        contribution = ai_contrib
+                        direction = "ai"
+                    else:
+                        contribution = human_contrib
+                        direction = "human"
+            else:  # Human prediction - explain why it's Human, but also show AI factors
+                if is_burstiness:
+                    # High burstiness contributes to Human, low to AI
+                    human_contrib = shap_weight * norm_val
+                    ai_contrib = shap_weight * (1.0 - norm_val)
+                    if human_contrib > ai_contrib:
+                        contribution = human_contrib
+                        direction = "human"
+                    else:
+                        contribution = ai_contrib
+                        direction = "ai"
+                else:
+                    # Low feature value contributes to Human, high to AI
+                    human_contrib = shap_weight * (1.0 - norm_val)
+                    ai_contrib = shap_weight * norm_val
+                    if human_contrib > ai_contrib:
+                        contribution = human_contrib
+                        direction = "human"
+                    else:
+                        contribution = ai_contrib
+                        direction = "ai"
+            
+            feature_impacts.append(
+                {
+                    "key": key,
+                    "label": meta["label"],
+                    "description": meta["description"],
+                    "raw_value": raw_val,
+                    "normalized_value": norm_val,
+                    "shap_weight": shap_weight,
+                    "signed_score": contribution,
+                    "direction": direction,
+                    "source": "shap_weights",
+                }
+            )
 
+    # Calculate global scores using simple averages (for highlighting)
+    # SHAP weights are used ONLY for explainability in feature_impacts, not for highlighting
     lex_norm = float(
         np.mean(
             [
@@ -1123,6 +1469,10 @@ def explain_text_with_features(
         "lexical_complexity": lex_norm,
         "formality": form_norm,
         "burstiness": burst_norm,
+        # Include additional features for explainability (not used in highlighting)
+        "hedge_ratio": normalized_features.get("hedge_ratio", 0.0),
+        "repetition_ratio": normalized_features.get("repetition_ratio", 0.0),
+        "stopword_ratio": normalized_features.get("stopword_ratio", 0.0),
     }
 
     # 3) gradient-based saliency
@@ -1163,50 +1513,40 @@ def explain_text_with_features(
     form_loc = _nz_norm(form_loc)
     burst_loc = _nz_norm(burst_loc)
 
-    lex_weight = float(
-        np.mean(
-            [
-                FEATURE_CORRELATIONS["lex_long_word_ratio"],
-                FEATURE_CORRELATIONS["lex_avg_word_len"],
-            ]
-        )
-    )
-    form_weight = float(
-        np.mean(
-            [
-                FEATURE_CORRELATIONS["form_first_person_ratio"],
-                FEATURE_CORRELATIONS["form_contraction_ratio"],
-            ]
-        )
-    )
-    burst_weight = float(
-        np.mean(
-            [
-                FEATURE_CORRELATIONS["burstiness"],
-                FEATURE_CORRELATIONS["syn_avg_sent_len"],
-                FEATURE_CORRELATIONS["syn_comma_per_sent"],
-            ]
-        )
-    )
+    # Use original simple approach: global_score * local_feature * saliency
+    # SHAP weights are already incorporated into the global_scores calculation above
+    # This keeps the highlighting working as before
+    g_lex = global_scores["lexical_complexity"]
+    g_form = global_scores["formality"]
+    g_burst = global_scores["burstiness"]
 
-    def _global_strength(score: float, weight: float) -> float:
-        centered = (score - 0.5) * 2.0  # -1 .. 1
-        return centered * weight
+    lex_contrib = g_lex * lex_loc * word_sal
+    form_contrib = g_form * form_loc * word_sal
+    burst_contrib = g_burst * burst_loc * word_sal
 
-    lex_strength = _global_strength(global_scores["lexical_complexity"], lex_weight)
-    form_strength = _global_strength(global_scores["formality"], form_weight)
-    burst_strength = _global_strength(global_scores["burstiness"], burst_weight)
-
-    lex_contrib_signed = lex_strength * lex_loc * word_sal
-    form_contrib_signed = form_strength * form_loc * word_sal
-    burst_contrib_signed = burst_strength * burst_loc * word_sal
-
+    # For AI predictions, we want positive contributions; for human, we want negative
+    # For explainability: AI = high feature scores push toward AI, Human = low feature scores push toward Human
     target_sign = 1.0 if pred == 1 else -1.0
-    lex_contrib_aligned = np.maximum(0.0, lex_contrib_signed * target_sign)
-    form_contrib_aligned = np.maximum(0.0, form_contrib_signed * target_sign)
-    burst_contrib_aligned = np.maximum(0.0, burst_contrib_signed * target_sign)
+    
+    # For Human predictions, we need to invert: low scores = Human contribution
+    if pred == 1:  # AI prediction
+        # High scores contribute to AI
+        lex_contrib_aligned = lex_contrib
+        form_contrib_aligned = form_contrib
+        burst_contrib_aligned = burst_contrib
+    else:  # Human prediction
+        # Low scores contribute to Human (invert the contributions)
+        # Exception: burstiness - high burstiness = Human, so don't invert
+        lex_contrib_aligned = 1.0 - lex_contrib
+        form_contrib_aligned = 1.0 - form_contrib
+        burst_contrib_aligned = burst_contrib  # High burstiness = Human, so keep as-is
+    
+    # Normalize to [0, 1] range
+    lex_contrib_aligned = np.maximum(0.0, np.minimum(1.0, lex_contrib_aligned))
+    form_contrib_aligned = np.maximum(0.0, np.minimum(1.0, form_contrib_aligned))
+    burst_contrib_aligned = np.maximum(0.0, np.minimum(1.0, burst_contrib_aligned))
 
-    total_signed = lex_contrib_signed + form_contrib_signed + burst_contrib_signed
+    total_signed = lex_contrib + form_contrib + burst_contrib
     total_aligned = lex_contrib_aligned + form_contrib_aligned + burst_contrib_aligned
 
     if total_aligned.max() > 0:
@@ -1253,43 +1593,71 @@ def explain_text_with_features(
         target_label="ai" if pred == 1 else "human",
     )
 
+    # Aggregate impacts: use aligned contributions that match the prediction
+    # For AI: show positive contributions, for Human: show negative contributions (flipped)
+    if pred == 1:  # AI prediction
+        lex_agg = float(lex_contrib_aligned.sum())
+        form_agg = float(form_contrib_aligned.sum())
+        burst_agg = float(burst_contrib_aligned.sum())
+    else:  # Human prediction - contributions are already aligned, but we want to show them as positive
+        # For Human, aligned contributions are already positive (from max(0, contrib * target_sign))
+        # But we need to make sure they represent Human contribution
+        lex_agg = float(lex_contrib_aligned.sum())
+        form_agg = float(form_contrib_aligned.sum())
+        burst_agg = float(burst_contrib_aligned.sum())
+    
     aggregate_impacts = [
         (
             "lexical_evidence",
             "Lexical Evidence",
             "Gradient-weighted lexical signals within highlighted spans.",
-            float(lex_contrib_signed.sum()),
+            lex_agg,
         ),
         (
             "formality_evidence",
             "Formality Evidence",
             "Formality cues such as connectors, contractions, and first-person voice.",
-            float(form_contrib_signed.sum()),
+            form_agg,
         ),
         (
             "burstiness_evidence",
             "Burstiness Evidence",
             "Sentence rhythm and burstiness compared to typical human variation.",
-            float(burst_contrib_signed.sum()),
+            burst_agg,
         ),
     ]
 
     for key, label, desc, value in aggregate_impacts:
-        if value == 0:
+        if abs(value) < 1e-10:  # Skip near-zero values
             continue
+        # Update description to match prediction direction
+        if pred == 1:  # AI prediction
+            direction_desc = "This signal increases the classifier's confidence that the text is AI-written."
+        else:  # Human prediction
+            direction_desc = "This signal increases the classifier's confidence that the text is human-written."
+        
         feature_impacts.insert(
             0,
             {
                 "key": key,
                 "label": label,
-                "description": desc,
+                "description": f"{desc} {direction_desc}",
                 "signed_score": value,
-                "direction": "ai" if value >= 0 else "human",
+                "direction": "ai" if pred == 1 else "human",  # Match the prediction
                 "source": "local",
             },
         )
 
-    feature_impacts.sort(key=lambda d: abs(d.get("signed_score", 0.0)), reverse=True)
+    # Sort by absolute contribution, but prioritize features matching the prediction
+    # This ensures supporting factors appear first, but opposing factors are still visible
+    def sort_key(d):
+        score = abs(d.get("signed_score", 0.0))
+        # Boost score if direction matches prediction (so supporting factors come first)
+        if d.get("direction") == ("ai" if pred == 1 else "human"):
+            return score * 1.1  # Slight boost for matching direction
+        return score
+    
+    feature_impacts.sort(key=sort_key, reverse=True)
 
     return {
         "prediction": pred,

@@ -106,8 +106,9 @@ export const AnalysisOutput = ({
 
     const topSpan = getTopSpanAtWord(index);
 
-    // Base AI-like highlight: stronger importance → deeper color
-    const opacity = Math.min(importance * 0.45, 0.7);
+    // Base highlight: stronger importance → deeper color
+    // Make green (human-like) more visible by increasing opacity
+    const opacity = Math.min(importance * 0.6, 0.85);
 
     // Optional uncertainty accent: words just above threshold
     // are considered "borderline" and get a yellow hint when toggled on
