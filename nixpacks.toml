@@ -1,0 +1,13 @@
+# Nixpacks configuration to explicitly use Python
+[phases.setup]
+nixPkgs = ["python311", "pip"]
+
+[phases.install]
+cmds = ["pip install -r backend/requirements.txt"]
+
+[phases.build]
+cmds = []
+
+[start]
+cmd = "python backend/main.py"
+
