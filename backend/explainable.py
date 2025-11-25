@@ -173,10 +173,6 @@ def load_detector(model_name: str = MODEL_NAME, use_gpu: bool = False):
     mem_before_gc = get_memory_mb()
     
     # Additional memory optimizations
-    # Clear Python's internal caches
-    import sys
-    if hasattr(sys, 'intern'):
-        sys.intern.__dict__.clear()
     
     # Force garbage collection multiple times to ensure cleanup
     for _ in range(3):

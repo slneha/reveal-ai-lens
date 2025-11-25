@@ -9,6 +9,14 @@ import { ControlPanel } from "@/components/ControlPanel";
 import { SummaryPanel } from "@/components/SummaryPanel";
 import { useToast } from "@/hooks/use-toast";
 
+// Debug: Log environment variable on module load
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
+console.log("🔍 Environment check:", {
+  VITE_API_URL: import.meta.env.VITE_API_URL,
+  "Final API_URL": API_URL,
+  "All env vars": Object.keys(import.meta.env).filter(k => k.startsWith('VITE_'))
+});
+
 const Index = () => {
   const [inputText, setInputText] = useState("");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -81,8 +89,8 @@ const Index = () => {
 
   const analyzeText = async (text: string) => {
     try {
-      // Use environment variable for API URL, fallback to localhost for development
-      const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
+      // Use the API_URL defined at module level (set from env var)
+      console.log("🌐 Making request to:", API_URL);
       const response = await fetch(`${API_URL}/api/analyze`, {
         method: "POST",
         headers: {
@@ -95,7 +103,9 @@ const Index = () => {
       });
 
       if (!response.ok) {
-        throw new Error(`API error: ${response.statusText}`);
+        const errorText = await response.text().catch(() => response.statusText);
+        console.error("API Error Response:", errorText);
+        throw new Error(`API error: ${response.status} ${response.statusText}`);
       }
 
       const result = await response.json();
@@ -106,8 +116,13 @@ const Index = () => {
       setConfidence(result.p_ai);
 
       return result;
-    } catch (error) {
+    } catch (error: any) {
       console.error("Analysis error:", error);
+      console.error("Error details:", {
+        message: error?.message,
+        stack: error?.stack,
+        API_URL: import.meta.env.VITE_API_URL || "http://localhost:5000"
+      });
       throw error;
     }
   };
