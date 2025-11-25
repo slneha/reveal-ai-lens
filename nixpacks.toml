@@ -1,11 +1,15 @@
 # Nixpacks configuration to explicitly use Python
+# Following Nixpkgs Python conventions: https://nixos.org/manual/nixpkgs/stable/#python
+# In Nixpkgs, python311 includes pip by default
 providers = ["python"]
+
 [phases.setup]
+# Use python311 from Nixpkgs (Python 3.11)
+# According to Nixpkgs: python311 includes pip and setuptools
 nixPkgs = ["python311"]
 
 [phases.install]
 cmds = [
-  "python -m ensurepip --upgrade",
   "python -m pip install --upgrade pip",
   "python -m pip install -r backend/requirements.txt"
 ]
