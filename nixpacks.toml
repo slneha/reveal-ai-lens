@@ -1,24 +1,26 @@
 # Nixpacks configuration to explicitly use Python
 # Following Nixpkgs Python conventions: https://nixos.org/manual/nixpkgs/stable/#python
+# Nix manages Python environments, so we use venv to install packages
 providers = ["python"]
 
 [phases.setup]
-# Use python311 and curl (for get-pip.py)
-# python311 in Nixpkgs doesn't include pip by default
-nixPkgs = ["python311", "curl"]
+# Use python311 from Nixpkgs
+# venv is included with python311, no need to install pip separately
+nixPkgs = ["python311"]
 
 [phases.install]
-# Install pip using get-pip.py (python311 in Nixpkgs doesn't include pip by default)
+# Create virtual environment to work around externally-managed-environment
+# This is the recommended way to install packages in Nix-managed Python
 cmds = [
-  "curl -sS https://bootstrap.pypa.io/get-pip.py -o get-pip.py",
-  "python get-pip.py",
-  "python -m pip install --upgrade pip",
-  "python -m pip install -r backend/requirements.txt"
+  "python -m venv /app/venv",
+  "/app/venv/bin/pip install --upgrade pip",
+  "/app/venv/bin/pip install -r backend/requirements.txt"
 ]
 
 [phases.build]
 cmds = []
 
 [start]
-cmd = "python backend/main.py"
+# Use Python from venv
+cmd = "/app/venv/bin/python backend/main.py"
 

@@ -1,9 +1,9 @@
 [build]
 builder = "NIXPACKS"
-buildCommand = "python -m pip install -r backend/requirements.txt"
+# Build is handled by nixpacks.toml
 
 [deploy]
-startCommand = "python backend/main.py"
+startCommand = "/app/venv/bin/python backend/main.py"
 healthcheckPath = "/health"
 healthcheckTimeout = 100
 restartPolicyType = "ON_FAILURE"
