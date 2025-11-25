@@ -8,7 +8,6 @@ import { AnalysisOutput, SpanData, TokenData } from "@/components/AnalysisOutput
 import { ControlPanel } from "@/components/ControlPanel";
 import { SummaryPanel } from "@/components/SummaryPanel";
 import { useToast } from "@/hooks/use-toast";
-import { API_URL } from "@/config";
 
 const Index = () => {
   const [inputText, setInputText] = useState("");
@@ -22,7 +21,6 @@ const Index = () => {
   const [sensitivity, setSensitivity] = useState(0.3);
   const [showUncertainty, setShowUncertainty] = useState(false);
   const { toast } = useToast();
-
 
   interface FeatureSummary {
     name: string;
@@ -81,6 +79,37 @@ const Index = () => {
   };
 
 
+  const analyzeText = async (text: string) => {
+    try {
+      const response = await fetch("http://localhost:5000/api/analyze", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          text: text,
+          max_length: 512,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`API error: ${response.statusText}`);
+      }
+
+      const result = await response.json();
+
+      // Store words and spans from API
+      setWords(result.words || []);
+      setSpans(result.spans || []);
+      setConfidence(result.p_ai);
+
+      return result;
+    } catch (error) {
+      console.error("Analysis error:", error);
+      throw error;
+    }
+  };
+
   const handleAnalyze = async () => {
     if (!inputText.trim()) {
       toast({
@@ -94,37 +123,18 @@ const Index = () => {
     setIsAnalyzing(true);
     setHasAnalyzed(false);
 
+    // Normalize text formatting before analysis
     const normalizedText = normalizeText(inputText);
+    
+    // Update input with normalized text
     setInputText(normalizedText);
 
-    // Call API
+    // Call real API
     try {
-      const response = await fetch(`${API_URL}/api/analyze`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          text: normalizedText,
-          top_k: 20,
-          max_length: 512,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`API error: ${response.status}`);
-      }
-
-      const result = await response.json();
-      
-      // Store words and spans
-      setWords(result.words || []);
-      setSpans(result.spans || []);
-      setConfidence(result.p_ai);
+      const result = await analyzeText(normalizedText);
       setTokens(result.tokens || []);
       setPrediction(result.prediction ?? 1);
 
-      // Process feature impacts
       const impacts: BackendImpact[] = Array.isArray(result.feature_impacts) ? result.feature_impacts : [];
       if (impacts.length > 0) {
         const mapped: FeatureSummary[] = impacts.map((impact) => {
@@ -159,7 +169,6 @@ const Index = () => {
         setFeatureSummaries(fallback);
       }
 
-      // Process sentences
       const backendSentences: SentenceSummary[] =
         (result?.sentences ?? []).map((sentence: { text: string; score: number }) => ({
           text: sentence.text,
@@ -178,7 +187,6 @@ const Index = () => {
           }));
         setSentenceSummaries(fallbackSentences);
       }
-      
       setIsAnalyzing(false);
       setHasAnalyzed(true);
       
@@ -190,12 +198,9 @@ const Index = () => {
       }
     } catch (error) {
       setIsAnalyzing(false);
-      console.error("Analysis error:", error);
       toast({
         title: "Analysis failed",
-        description: error instanceof Error 
-          ? error.message 
-          : "Could not connect to backend API. Please make sure the FastAPI server is running on port 5000.",
+        description: "Could not connect to backend API. Make sure the Flask server is running on port 5000.",
         variant: "destructive",
       });
     }
@@ -245,7 +250,10 @@ const Index = () => {
                     Analyzing...
                   </>
                 ) : (
-                  "Analyze Text"
+                  <>
+                    <Sparkles className="w-4 h-4 mr-2" />
+                    Analyze Text
+                  </>
                 )}
               </Button>
             </div>

@@ -1,14 +1,12 @@
 """
-FastAPI for AI Text Detector with Explainability
+Flask API for AI Text Detector with Explainability
+Supports both WSGI (Flask built-in) and ASGI (uvicorn) via asgiref wrapper
 """
 
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
-from typing import Optional, List, Dict, Any
+from flask import Flask, request, jsonify
+from flask_cors import CORS
 import sys
 import os
-import uvicorn
 
 # Add backend directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -18,63 +16,59 @@ from explainable import (
     explain_text_with_features,
 )
 
-app = FastAPI(
-    title="AI Text Detector API",
-    description="AI Text Detector with Explainability",
-    version="1.0.0"
-)
+app = Flask(__name__)
+# Configure CORS explicitly to handle preflight OPTIONS requests
+# Allow all origins, headers, and methods for development
+CORS(app, 
+     resources={r"/*": {"origins": "*"}},
+     allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
+     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+     supports_credentials=False,
+     automatic_options=True)
 
-# Enable CORS for all routes
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # In production, replace with specific origins
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Create ASGI wrapper for uvicorn compatibility
+try:
+    from asgiref.wsgi import WsgiToAsgi
+    asgi_app = WsgiToAsgi(app)
+except ImportError:
+    # asgiref not available, ASGI wrapper won't work
+    asgi_app = None
 
+# Add after_request handler to ensure CORS headers are always set
+# This is critical for OPTIONS preflight requests and works with both WSGI and ASGI
+@app.after_request
+def after_request(response):
+    # Add CORS headers to all responses (including errors)
+    # This ensures OPTIONS preflight requests always get proper headers
+    origin = request.headers.get('Origin')
+    if origin:
+        # Use the requesting origin if provided
+        response.headers.add('Access-Control-Allow-Origin', origin)
+    else:
+        # Fallback to * for requests without Origin header
+        response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With')
+    response.headers.add('Access-Control-Allow-Methods', 'GET, PUT, POST, DELETE, OPTIONS')
+    response.headers.add('Access-Control-Max-Age', '3600')
+    return response
 
-# Pydantic models for request/response
-class AnalyzeRequest(BaseModel):
-    text: str = Field(..., description="Text to analyze")
-    top_k: Optional[int] = Field(3, description="Number of top spans to return")
-    max_length: Optional[int] = Field(512, description="Maximum text length")
-
-
-class HealthResponse(BaseModel):
-    status: str
-
-
-@app.on_event("startup")
-def load_model():
-    """Load the model on startup"""
-    print("Loading AI detector model...")
-    try:
-        load_detector(use_gpu=False)
-        print("Model loaded successfully!")
-    except Exception as e:
-        print(f"Error loading model: {e}")
-
-
-@app.get("/")
-async def root():
-    """Root endpoint"""
-    return {
-        "message": "AI Text Detector API",
-        "version": "1.0.0",
-        "docs": "/docs",
-        "health": "/health"
-    }
+# Load the model on startup
+print("Loading AI detector model...")
+try:
+    load_detector(use_gpu=False)
+    print("Model loaded successfully!")
+except Exception as e:
+    print(f"Error loading model: {e}")
 
 
-@app.get("/health", response_model=HealthResponse)
-async def health():
+@app.route("/health", methods=["GET"])
+def health():
     """Health check endpoint"""
-    return {"status": "healthy"}
+    return jsonify({"status": "healthy"}), 200
 
 
-@app.post("/api/analyze")
-async def analyze_text(request: AnalyzeRequest):
+@app.route("/api/analyze", methods=["POST", "OPTIONS"])
+def analyze_text():
     """
     Analyze text for AI detection with explainability
     
@@ -115,15 +109,26 @@ async def analyze_text(request: AnalyzeRequest):
         ]
     }
     """
+    # Handle OPTIONS preflight request - flask-cors should handle this automatically
+    # but we'll handle it explicitly to be safe
+    if request.method == "OPTIONS":
+        return jsonify({}), 200
+    
     try:
-        if not request.text or not request.text.strip():
-            raise HTTPException(status_code=400, detail="Empty text provided")
+        data = request.get_json()
         
-        max_length = request.max_length or 512
+        if not data or "text" not in data:
+            return jsonify({"error": "No text provided"}), 400
+        
+        text = data["text"]
+        if not text or not text.strip():
+            return jsonify({"error": "Empty text provided"}), 400
+        
+        max_length = data.get("max_length", 512)
         
         # Run the explainable analysis with top_k=20 for comprehensive highlighting
         result = explain_text_with_features(
-            text=request.text,
+            text=text,
             max_length=max_length,
             top_k=20
         )
@@ -169,31 +174,19 @@ async def analyze_text(request: AnalyzeRequest):
             "feature_impacts": result.get("feature_impacts", []),
         }
 
-        return response
         
-    except HTTPException:
-        raise
+        return jsonify(response), 200
+        
     except Exception as e:
         print(f"Error analyzing text: {e}")
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == "__main__":
-    # Use uvicorn (works on Windows and all platforms)
+    # Run Flask app with built-in WSGI server
     port = int(os.environ.get("PORT", 5000))
-    debug = os.environ.get("DEBUG", "false").lower() == "true"
-    reload = os.environ.get("RELOAD", "true" if debug else "false").lower() == "true"
-    
-    print(f"Starting server with uvicorn on port {port}...")
-    if reload:
-        print("Auto-reload enabled (restart on code changes)")
-    
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=port,
-        reload=reload,
-        log_level="debug" if debug else "info"
-    )
+    print(f"Starting Flask server on port {port}...")
+    print("Note: If you want to use uvicorn, run: uvicorn backend.main:asgi_app --host 0.0.0.0 --port 5000")
+    app.run(host="0.0.0.0", port=port, debug=True)

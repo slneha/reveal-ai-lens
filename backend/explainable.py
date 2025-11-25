@@ -50,14 +50,14 @@ device = torch.device("cpu")
 
 def load_detector(model_name: str = MODEL_NAME, use_gpu: bool = False):
     """
-    Load the RoBERTa-based AI detector.
+    Load the RoBERTa-based AI detector with efficient memory placement.
 
     Parameters
     ----------
     model_name : str
         Hugging Face model id.
     use_gpu : bool
-        If True and CUDA is available, put model on GPU.
+        If True and CUDA is available, use GPU. Otherwise uses CPU.
 
     Returns
     -------
@@ -65,16 +65,62 @@ def load_detector(model_name: str = MODEL_NAME, use_gpu: bool = False):
     """
     global tokenizer, model, device
 
+    print(f"Loading tokenizer for {model_name}...")
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForSequenceClassification.from_pretrained(model_name)
+    
+    print(f"Loading model with device_map='auto' for efficient memory placement...")
+    
+    # Use device_map="auto" for efficient memory placement
+    # This automatically handles CPU/GPU placement and can split large models across devices
+    try:
+        model = AutoModelForSequenceClassification.from_pretrained(
+            model_name,
+            device_map="auto",  # Automatic device placement for memory efficiency
+            torch_dtype=torch.float32,  # Use float32 for compatibility
+        )
+        print("✓ Model loaded with device_map='auto'")
+    except Exception as e:
+        print(f"Warning: device_map='auto' failed ({e}), falling back to manual placement")
+        # Fallback to manual device placement
+        model = AutoModelForSequenceClassification.from_pretrained(model_name)
+        if use_gpu and torch.cuda.is_available():
+            device = torch.device("cuda")
+            model = model.to(device)
+        else:
+            device = torch.device("cpu")
+            model = model.to(device)
+        model.eval()
+        print(f"Model loaded successfully on device: {device}")
+        return tokenizer, model, device
 
-    if use_gpu and torch.cuda.is_available():
-        device = torch.device("cuda")
+    # Determine device from model's actual placement when using device_map
+    if hasattr(model, 'hf_device_map') and model.hf_device_map:
+        # Model was split across devices, determine primary device
+        device_map = model.hf_device_map
+        # Get the device of the first layer
+        first_layer_device = list(device_map.values())[0] if device_map else "cpu"
+        if isinstance(first_layer_device, int):
+            device = torch.device(f"cuda:{first_layer_device}" if torch.cuda.is_available() else "cpu")
+        elif isinstance(first_layer_device, str):
+            device = torch.device(first_layer_device)
+        else:
+            device = torch.device("cpu")
+        print(f"Model distributed across devices: {device_map}")
+    elif hasattr(model, 'device'):
+        device = model.device
     else:
+        # Check where parameters actually are
+        first_param = next(model.parameters())
+        device = first_param.device
+    
+    # If use_gpu=False, ensure model is on CPU
+    if not use_gpu and device.type != "cpu":
+        print("Moving model to CPU as requested...")
+        model = model.to("cpu")
         device = torch.device("cpu")
 
-    model.to(device)
     model.eval()
+    print(f"Model loaded successfully on device: {device}")
     return tokenizer, model, device
 
 
@@ -846,7 +892,7 @@ def explain_text_with_features(
       - computes features on the fly for this text only
       - uses simple heuristics (no global z-scores) to create global scores
 
-    This is handy for a Lovable / FastAPI UI where you just get one text.
+    This is handy for a Lovable / Flask UI where you just get one text.
 
     NOTE: Global scores here are *relative to this document*, not to your
     full dataset. For your paper, continue using explain_row_with_features
