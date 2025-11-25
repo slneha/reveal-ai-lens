@@ -20,9 +20,10 @@ CORS(app)  # Enable CORS for all routes
 
 # Load the model on startup with memory optimizations
 print("Loading AI detector model with memory optimizations (float16, low_cpu_mem_usage)...")
+print("Note: Target is <512MB, but RoBERTa models typically require ~800-900MB even with optimizations")
 try:
     load_detector(use_gpu=False)
-    print("Model loaded successfully! (Optimized for <512MB hosting)")
+    print("Model loaded successfully!")
 except Exception as e:
     print(f"Error loading model: {e}")
 
@@ -31,6 +32,35 @@ except Exception as e:
 def health():
     """Health check endpoint"""
     return jsonify({"status": "healthy"}), 200
+
+
+@app.route("/api/memory", methods=["GET"])
+def memory_info():
+    """Get current memory usage information"""
+    try:
+        import psutil
+        import os
+        process = psutil.Process(os.getpid())
+        mem_info = process.memory_info()
+        
+        # Get system memory info
+        sys_mem = psutil.virtual_memory()
+        
+        return jsonify({
+            "process_memory_mb": mem_info.rss / (1024 * 1024),
+            "process_memory_percent": process.memory_percent(),
+            "system_total_mb": sys_mem.total / (1024 * 1024),
+            "system_available_mb": sys_mem.available / (1024 * 1024),
+            "system_used_percent": sys_mem.percent,
+            "within_512mb_limit": (mem_info.rss / (1024 * 1024)) < 512
+        }), 200
+    except ImportError:
+        return jsonify({
+            "error": "psutil not available",
+            "install": "pip install psutil"
+        }), 503
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/analyze", methods=["POST"])
@@ -152,5 +182,8 @@ def analyze_text():
 
 if __name__ == "__main__":
     # Run Flask app
+    # Railway/Render use PORT env var (auto-set), fallback to 5000 for local dev
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=True)
+    # Disable debug mode in production (only enable for local dev on port 5000)
+    debug = (port == 5000 and os.environ.get("FLASK_ENV") != "production")
+    app.run(host="0.0.0.0", port=port, debug=debug)

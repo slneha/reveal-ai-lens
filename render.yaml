@@ -2,11 +2,12 @@ services:
   - type: web
     name: ai-text-detector-backend
     runtime: python
-    buildCommand: pip install -r backend/requirements.txt
-    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    buildCommand: cd backend && pip install -r requirements.txt
+    startCommand: cd backend && python main.py
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
       - key: PORT
         value: 10000
     healthCheckPath: /health
+    plan: starter  # 512MB RAM - required for model loading

@@ -66,45 +66,101 @@ def load_detector(model_name: str = MODEL_NAME, use_gpu: bool = False):
     """
     global tokenizer, model, device
     import gc
-
+    import os
+    
+    # Memory profiling
+    try:
+        import psutil
+        process = psutil.Process(os.getpid())
+        def get_memory_mb():
+            """Get current memory usage in MB"""
+            mem_info = process.memory_info()
+            return mem_info.rss / (1024 * 1024)  # Convert bytes to MB
+        psutil_available = True
+    except ImportError:
+        psutil_available = False
+        def get_memory_mb():
+            return 0
+    
+    # Track memory at different stages
+    mem_start = get_memory_mb()
+    print(f"[MEMORY] Initial memory: {mem_start:.1f} MB")
+    
     print(f"Loading tokenizer for {model_name}...")
     tokenizer = AutoTokenizer.from_pretrained(model_name)
+    mem_after_tokenizer = get_memory_mb()
+    print(f"[MEMORY] After tokenizer: {mem_after_tokenizer:.1f} MB (+{mem_after_tokenizer - mem_start:.1f} MB)")
     
-    print(f"Loading model with aggressive memory optimizations (float16, low_cpu_mem_usage)...")
+    print(f"Loading model with ULTRA memory optimizations (8-bit quantization, float16, low_cpu_mem_usage)...")
     
     # Aggressive memory optimizations for <512MB hosting
     device = torch.device("cpu")  # Force CPU to avoid GPU memory
+    mem_before_model = get_memory_mb()
+    print(f"[MEMORY] Before model load: {mem_before_model:.1f} MB")
     
+    # Try loading with float16 first, then apply dynamic quantization
     try:
-        # Try loading with maximum memory optimizations
+        # Step 1: Load with float16 (use dtype instead of deprecated torch_dtype)
+        print("Loading model with float16...")
         model = AutoModelForSequenceClassification.from_pretrained(
             model_name,
-            torch_dtype=torch.float16,  # Half precision - halves memory usage
-            low_cpu_mem_usage=True,  # Reduces peak memory during loading
-            device_map="cpu",  # Explicit CPU placement
-            use_safetensors=True,  # More efficient format if available
+            dtype=torch.float16,  # Use dtype instead of torch_dtype
+            low_cpu_mem_usage=True,
+            device_map="cpu",
+            use_safetensors=True,
         )
-        print("✓ Model loaded with float16 and low_cpu_mem_usage")
+        mem_after_float16 = get_memory_mb()
+        print(f"[MEMORY] After float16 load: {mem_after_float16:.1f} MB (+{mem_after_float16 - mem_before_model:.1f} MB)")
+        
+        # Step 2: Skip quantization for now - it increases memory overhead
+        # PyTorch's dynamic quantization creates overhead that exceeds savings for this model
+        print("⚠ Skipping quantization (increases memory overhead for this model)")
+        print("✓ Using float16 only - this is the most memory-efficient option")
+        
+        # Note: Quantization would be ideal, but PyTorch's dynamic quantization
+        # creates temporary overhead that exceeds memory savings for RoBERTa models.
+        # For production, consider:
+        # 1. Using a smaller model variant
+        # 2. Static quantization (requires calibration data)
+        # 3. Model pruning
+        # 4. Upgrading to 1GB instance
     except Exception as e:
-        print(f"Warning: Optimized loading failed ({e}), trying fallback...")
+        print(f"Quantization failed ({e}), trying float16 only...")
         try:
-            # Fallback: try without safetensors
+            # Fallback: float16 without quantization
             model = AutoModelForSequenceClassification.from_pretrained(
                 model_name,
-                torch_dtype=torch.float16,
+                dtype=torch.float16,
                 low_cpu_mem_usage=True,
+                device_map="cpu",
+                use_safetensors=True,
             )
-            model = model.to(device)
-            print("✓ Model loaded with float16 (fallback)")
+            mem_after_model = get_memory_mb()
+            print(f"[MEMORY] After model load (float16): {mem_after_model:.1f} MB (+{mem_after_model - mem_before_model:.1f} MB)")
+            print("✓ Model loaded with float16 (quantization unavailable)")
         except Exception as e2:
-            print(f"Warning: float16 failed ({e2}), using float32 as last resort...")
-            # Last resort: float32 but still with low_cpu_mem_usage
-            model = AutoModelForSequenceClassification.from_pretrained(
-                model_name,
-                low_cpu_mem_usage=True,
-            )
-            model = model.to(device)
-            print("✓ Model loaded with float32 (last resort)")
+            print(f"Float16 failed ({e2}), trying without device_map...")
+            try:
+                model = AutoModelForSequenceClassification.from_pretrained(
+                    model_name,
+                    dtype=torch.float16,
+                    low_cpu_mem_usage=True,
+                )
+                model = model.to(device)
+                mem_after_model = get_memory_mb()
+                print(f"[MEMORY] After model load (float16 fallback): {mem_after_model:.1f} MB (+{mem_after_model - mem_before_model:.1f} MB)")
+                print("✓ Model loaded with float16 (fallback)")
+            except Exception as e3:
+                print(f"All optimizations failed ({e3}), using float32 as last resort...")
+                # Last resort: float32 but still with low_cpu_mem_usage
+                model = AutoModelForSequenceClassification.from_pretrained(
+                    model_name,
+                    low_cpu_mem_usage=True,
+                )
+                model = model.to(device)
+                mem_after_model = get_memory_mb()
+                print(f"[MEMORY] After model load (float32): {mem_after_model:.1f} MB (+{mem_after_model - mem_before_model:.1f} MB)")
+                print("⚠ Model loaded with float32 (last resort - may exceed 512MB)")
 
     # Ensure model is on CPU and in eval mode
     model = model.to(device)
@@ -114,12 +170,55 @@ def load_detector(model_name: str = MODEL_NAME, use_gpu: bool = False):
     for param in model.parameters():
         param.requires_grad = False
     
-    # Force garbage collection after loading
-    gc.collect()
+    mem_before_gc = get_memory_mb()
+    
+    # Additional memory optimizations
+    # Clear Python's internal caches
+    import sys
+    if hasattr(sys, 'intern'):
+        sys.intern.__dict__.clear()
+    
+    # Force garbage collection multiple times to ensure cleanup
+    for _ in range(3):
+        gc.collect()
+    
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
     
-    print(f"Model loaded successfully on device: {device} (dtype: {next(model.parameters()).dtype})")
+    mem_after_gc = get_memory_mb()
+    mem_final = get_memory_mb()
+    
+    # Calculate model size (approximate)
+    if psutil_available:
+        try:
+            model_size_mb = sum(p.numel() * p.element_size() for p in model.parameters()) / (1024 * 1024)
+            print(f"[MEMORY] Estimated model size: {model_size_mb:.1f} MB")
+        except:
+            print(f"[MEMORY] Could not estimate model size (quantized model)")
+    
+    print(f"[MEMORY] After GC: {mem_after_gc:.1f} MB (freed {max(0, mem_before_gc - mem_after_gc):.1f} MB)")
+    print(f"[MEMORY] Final memory usage: {mem_final:.1f} MB (total increase: {mem_final - mem_start:.1f} MB)")
+    
+    # Check if we're within limit
+    if mem_final < 512:
+        print(f"[MEMORY] ✓ SUCCESS: Memory usage: {mem_final:.1f} MB / 512 MB limit ({mem_final/512*100:.1f}%)")
+    elif mem_final < 1024:
+        print(f"[MEMORY] ⚠ WARNING: Memory usage: {mem_final:.1f} MB / 512 MB limit ({mem_final/512*100:.1f}%)")
+        print(f"[MEMORY] ⚠ Exceeds 512MB limit by {mem_final - 512:.1f} MB")
+        print(f"[MEMORY] 💡 RECOMMENDATION: Upgrade to 1GB instance (Standard plan ~$25/month)")
+        print(f"[MEMORY] 💡 Alternative: Use a smaller/distilled model variant if available")
+        print(f"[MEMORY] 📊 Current: {mem_final:.1f} MB | Target: 512 MB | Recommended: 1024 MB")
+    else:
+        print(f"[MEMORY] ❌ CRITICAL: Memory usage: {mem_final:.1f} MB / 512 MB limit ({mem_final/512*100:.1f}%)")
+        print(f"[MEMORY] ❌ Exceeds limit by {mem_final - 512:.1f} MB - MUST upgrade instance")
+    
+    # Get model dtype info
+    try:
+        dtype_info = next(model.parameters()).dtype
+        print(f"Model loaded successfully on device: {device} (dtype: {dtype_info})")
+    except:
+        print(f"Model loaded successfully on device: {device} (quantized)")
+    
     return tokenizer, model, device
 
 

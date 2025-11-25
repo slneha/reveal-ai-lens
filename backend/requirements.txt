@@ -5,3 +5,5 @@ transformers
 safetensors
 numpy
 pandas
+psutil
+accelerate
