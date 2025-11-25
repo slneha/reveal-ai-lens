@@ -48,8 +48,38 @@ This measures how much each token influences the AI logit. Gradient saliency the
 
 ## To Run
 
-py -r backend/requirements.txt
-py backend/main.py
+### Backend
 
+```bash
+# Install dependencies
+pip install -r backend/requirements.txt
+
+# Run Flask server (default: http://localhost:5000)
+python backend/main.py
+```
+
+### Frontend
+
+```bash
+# Install dependencies
+npm install
+
+# Configure API URL (optional, defaults to http://localhost:5000)
+# Create .env file with:
+# VITE_API_URL=http://localhost:5000
+# Or for production:
+# VITE_API_URL=https://web-production-26e24.up.railway.app
+
+# Run development server
 npm run dev
+```
+
+### Production Backend
+
+The backend is deployed on Railway at: `https://web-production-26e24.up.railway.app`
+
+To use the production backend in the frontend, set:
+```bash
+VITE_API_URL=https://web-production-26e24.up.railway.app
+```
 
