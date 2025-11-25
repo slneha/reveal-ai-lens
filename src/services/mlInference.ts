@@ -1,213 +1,183 @@
-// Browser-based ML inference using Hugging Face Transformers.js
-import { pipeline } from "@huggingface/transformers";
-import { extractTextFeatures, FEATURE_CORRELATIONS, FEATURE_BASELINES, FEATURE_SCALES, FEATURE_METADATA } from "./textFeatures";
+/**
+ * Browser-based ML inference using Hugging Face Inference API
+ * Uses backend proxy to avoid CORS issues
+ */
 
-let classifierPipeline: any | null = null;
-let isLoading = false;
-let loadError: string | null = null;
+const BACKEND_API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
 
-// Using a smaller ONNX-compatible model for browser inference
-// The original model might not have ONNX weights, so we'll use a compatible alternative
-const MODEL_NAME = "Xenova/distilbert-base-uncased-finetuned-sst-2-english";
-
-export async function loadModel(onProgress?: (progress: number) => void): Promise<void> {
-  if (classifierPipeline) return;
-  if (isLoading) return;
-
-  isLoading = true;
-  loadError = null;
-
-  try {
-    console.log("Loading AI detection model...");
-    
-    // Try to load with progress tracking
-    classifierPipeline = await pipeline(
-      "text-classification",
-      MODEL_NAME,
-      {
-        device: "webgpu", // Use WebGPU if available, will fallback to WASM
-      }
-    );
-    
-    console.log("Model loaded successfully!");
-    onProgress?.(100);
-  } catch (error) {
-    console.error("Error loading model:", error);
-    loadError = error instanceof Error ? error.message : "Failed to load model";
-    // Fallback to WASM if WebGPU fails
+/**
+ * Call Hugging Face Inference API via backend proxy (avoids CORS)
+ */
+async function callHFInferenceAPI(text: string, maxRetries = 3): Promise<any> {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
-      console.log("Retrying with WASM...");
-      classifierPipeline = await pipeline(
-        "text-classification",
-        MODEL_NAME
-      );
-      console.log("Model loaded with WASM successfully!");
-      onProgress?.(100);
-      loadError = null;
-    } catch (wasmError) {
-      console.error("WASM fallback also failed:", wasmError);
-      throw wasmError;
-    }
-  } finally {
-    isLoading = false;
-  }
-}
-
-export function isModelLoaded(): boolean {
-  return classifierPipeline !== null;
-}
-
-export function getLoadError(): string | null {
-  return loadError;
-}
-
-function zTo01(z: number): number {
-  return 1.0 / (1.0 + Math.exp(-z));
-}
-
-function featureDeviation(key: string, value: number): number {
-  const baseline = FEATURE_BASELINES[key] || 0;
-  const scale = FEATURE_SCALES[key] || 1;
-  const raw = (value - baseline) / scale;
-  return Math.max(-1, Math.min(1, raw));
-}
-
-interface Span {
-  text: string;
-  start: number;
-  end: number;
-  score: number;
-  dominant_feature: string;
-  features: {
-    [key: string]: {
-      contribution: number;
-      reason: string;
-    };
-  };
-}
-
-// Simplified span generation based on sentence analysis
-function generateSpans(text: string, prediction: number, features: any): Span[] {
-  const sentences = text.split(/[.!?]+/).filter(s => s.trim());
-  const spans: Span[] = [];
-  
-  const targetLabel = prediction === 1 ? "ai" : "human";
-  
-  // Analyze each sentence
-  sentences.forEach((sent, idx) => {
-    const trimmed = sent.trim();
-    if (!trimmed || trimmed.split(/\s+/).length < 3) return;
-    
-    // Calculate feature contributions for this sentence
-    const sentFeatures = extractTextFeatures(trimmed);
-    const contributions: Record<string, number> = {};
-    
-    Object.keys(FEATURE_CORRELATIONS).forEach(key => {
-      const corr = FEATURE_CORRELATIONS[key];
-      const deviation = featureDeviation(key, sentFeatures[key as keyof typeof sentFeatures] || 0);
-      contributions[key] = corr * deviation;
-    });
-    
-    // Find dominant feature
-    const sortedContribs = Object.entries(contributions)
-      .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
-    
-    const [dominantFeature, dominantScore] = sortedContribs[0] || ["burstiness", 0];
-    
-    // Calculate overall score
-    const totalScore = Object.values(contributions).reduce((sum, val) => sum + Math.abs(val), 0);
-    const normalizedScore = Math.min(1, totalScore / 2); // Normalize to 0-1
-    
-    if (normalizedScore > 0.1) { // Only include significant spans
-      const startPos = text.indexOf(trimmed);
-      
-      spans.push({
-        text: trimmed,
-        start: startPos,
-        end: startPos + trimmed.length,
-        score: normalizedScore,
-        dominant_feature: dominantFeature,
-        features: Object.fromEntries(
-          sortedContribs.slice(0, 3).map(([key, value]) => [
-            key,
-            {
-              contribution: value,
-              reason: FEATURE_METADATA[key]?.description || key
-            }
-          ])
-        )
+      const response = await fetch(`${BACKEND_API_URL}/api/hf-inference`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ text }),
       });
+
+      if (response.status === 503) {
+        // Model is loading, wait and retry
+        const waitTime = Math.pow(2, attempt) * 5; // Exponential backoff: 5s, 10s, 20s
+        console.log(`Model loading, waiting ${waitTime}s... (attempt ${attempt + 1}/${maxRetries})`);
+        await new Promise(resolve => setTimeout(resolve, waitTime * 1000));
+        continue;
+      }
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(`HF API error: ${response.status} ${errorData.error || response.statusText}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      if (attempt === maxRetries - 1) {
+        throw error;
+      }
+      const waitTime = Math.pow(2, attempt) * 2;
+      console.log(`Retrying in ${waitTime}s... (attempt ${attempt + 1}/${maxRetries})`);
+      await new Promise(resolve => setTimeout(resolve, waitTime * 1000));
     }
-  });
+  }
   
-  // Sort by score and return top spans
-  return spans.sort((a, b) => b.score - a.score).slice(0, 20);
+  throw new Error("Failed to call HF Inference API after retries");
 }
 
-export async function analyzeText(text: string): Promise<any> {
-  if (!classifierPipeline) {
-    await loadModel();
+/**
+ * Run inference and get predictions using HF Inference API
+ */
+export async function predict(text: string): Promise<{
+  prediction: number; // 0 = Human, 1 = AI
+  p_human: number;
+  p_ai: number;
+  logits: number[];
+}> {
+  console.log("Calling Hugging Face Inference API...");
+  
+  const result = await callHFInferenceAPI(text);
+
+  // Process results - HF returns array of {label, score} or single object
+  let p_human = 0.5;
+  let p_ai = 0.5;
+
+  const results = Array.isArray(result) ? result : [result];
+
+  for (const item of results) {
+    const label = (item.label || "").toLowerCase();
+    const score = item.score || 0.5;
+    
+    if (label.includes("human") || label === "label_0" || label === "0" || label.includes("negative")) {
+      p_human = score;
+    } else if (label.includes("ai") || label.includes("machine") || label === "label_1" || label === "1" || label.includes("positive")) {
+      p_ai = score;
+    }
   }
 
-  if (!classifierPipeline) {
-    throw new Error("Model not loaded");
+  // If we only got one result, infer the other
+  if (results.length === 1 && p_human === 0.5 && p_ai === 0.5) {
+    const singleScore = results[0].score || 0.5;
+    const singleLabel = (results[0].label || "").toLowerCase();
+    if (singleLabel.includes("human") || singleLabel === "label_0" || singleLabel === "0") {
+      p_human = singleScore;
+      p_ai = 1 - singleScore;
+    } else {
+      p_ai = singleScore;
+      p_human = 1 - singleScore;
+    }
   }
 
-  console.log("Analyzing text...");
+  // Normalize to sum to 1
+  const total = p_human + p_ai;
+  if (total > 0) {
+    p_human = p_human / total;
+    p_ai = p_ai / total;
+  }
 
-  // Get model prediction
-  const result = await classifierPipeline(text, { topk: 2 });
-  console.log("Classification result:", result);
-
-  // Extract features
-  const features = extractTextFeatures(text);
-  console.log("Extracted features:", features);
-
-  // For distilbert-sst-2, labels are POSITIVE/NEGATIVE
-  // We'll map this to AI/Human based on the confidence
-  // Higher POSITIVE score = more AI-like (coherent, well-formed)
-  const positiveResult = Array.isArray(result) ? result.find((r: any) => r.label === "POSITIVE") : null;
-  const p_ai = positiveResult ? positiveResult.score : 0.5;
-  const prediction = p_ai > 0.5 ? 1 : 0;
-
-  // Calculate global scores
-  const globalScores = {
-    lexical_complexity: (features.lex_avg_word_len / 6 + features.lex_long_word_ratio) / 2,
-    formality: features.form_connector_ratio * 2,
-    burstiness: 1 - Math.min(1, features.burstiness / 1.5) // Invert: low burstiness = more AI-like
-  };
-
-  // Generate spans
-  const spans = generateSpans(text, prediction, features);
-
-  // Create feature impacts
-  const featureImpacts = Object.entries(FEATURE_CORRELATIONS)
-    .map(([key, corr]) => {
-      const rawValue = features[key as keyof typeof features] || 0;
-      const deviation = featureDeviation(key, rawValue);
-      const signedScore = corr * deviation;
-      
-      return {
-        key,
-        label: FEATURE_METADATA[key]?.label || key,
-        description: FEATURE_METADATA[key]?.description || "",
-        raw_value: rawValue,
-        deviation,
-        correlation: corr,
-        signed_score: signedScore,
-        direction: signedScore >= 0 ? "ai" : "human",
-        source: "global"
-      };
-    })
-    .sort((a, b) => Math.abs(b.signed_score) - Math.abs(a.signed_score));
+  const prediction = p_ai > p_human ? 1 : 0;
+  const logits = [Math.log(p_human / (1 - p_human)), Math.log(p_ai / (1 - p_ai))];
 
   return {
     prediction,
+    p_human,
     p_ai,
-    p_human: 1 - p_ai,
-    global_scores: globalScores,
-    spans,
-    words: text.split(/\s+/),
-    feature_impacts: featureImpacts
+    logits,
+  };
+}
+
+/**
+ * Get token-level saliency scores using heuristics
+ * Note: Since we're using HF Inference API, we can't compute gradients.
+ * We use linguistic heuristics as a proxy for saliency, which the backend
+ * will combine with its own feature analysis for better accuracy.
+ */
+export async function getTokenSaliency(
+  text: string
+): Promise<{
+  tokens: string[];
+  scores: number[];
+}> {
+  // Use heuristic-based saliency (backend will refine this with its feature analysis)
+  const words = text.split(/\s+/);
+  const scores: number[] = [];
+  
+  // Heuristic: longer words, formal connectors, and words in middle tend to be more important
+  const midPoint = words.length / 2;
+  const formalConnectors = new Set([
+    "furthermore", "moreover", "therefore", "consequently", "thus", "hence",
+    "additionally", "nevertheless", "nonetheless", "accordingly", "subsequently"
+  ]);
+  
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i].toLowerCase().replace(/[.,!?;:]/g, "");
+    let score = 0.3; // Base score
+    
+    // Longer words get higher score (lexical complexity indicator)
+    if (word.length >= 7) score += 0.2;
+    if (word.length >= 10) score += 0.15;
+    
+    // Formal connectors get higher score (formality indicator)
+    if (formalConnectors.has(word)) score += 0.3;
+    
+    // Words near middle get slightly higher score (often more important contextually)
+    const distanceFromMid = Math.abs(i - midPoint) / Math.max(midPoint, 1);
+    score += (1 - distanceFromMid) * 0.1;
+    
+    scores.push(Math.min(1.0, score));
+  }
+  
+  // Normalize scores
+  const maxScore = Math.max(...scores, 0.01);
+  for (let i = 0; i < scores.length; i++) {
+    scores[i] = scores[i] / maxScore;
+  }
+  
+  return {
+    tokens: words,
+    scores,
+  };
+}
+
+/**
+ * Combined function: get both prediction and saliency
+ */
+export async function analyzeWithSaliency(text: string): Promise<{
+  prediction: number;
+  p_human: number;
+  p_ai: number;
+  tokens: string[];
+  tokenScores: number[];
+}> {
+  const [predictionResult, saliencyResult] = await Promise.all([
+    predict(text),
+    getTokenSaliency(text),
+  ]);
+
+  return {
+    ...predictionResult,
+    tokens: saliencyResult.tokens,
+    tokenScores: saliencyResult.scores,
   };
 }

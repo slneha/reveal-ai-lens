@@ -1,6 +1,5 @@
 """
 Flask API for AI Text Detector with Explainability
-Supports both WSGI (Flask built-in) and ASGI (uvicorn) via asgiref wrapper
 """
 
 from flask import Flask, request, jsonify
@@ -17,46 +16,13 @@ from explainable import (
 )
 
 app = Flask(__name__)
-# Configure CORS explicitly to handle preflight OPTIONS requests
-# Allow all origins, headers, and methods for development
-CORS(app, 
-     resources={r"/*": {"origins": "*"}},
-     allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
-     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-     supports_credentials=False,
-     automatic_options=True)
+CORS(app)  # Enable CORS for all routes
 
-# Create ASGI wrapper for uvicorn compatibility
-try:
-    from asgiref.wsgi import WsgiToAsgi
-    asgi_app = WsgiToAsgi(app)
-except ImportError:
-    # asgiref not available, ASGI wrapper won't work
-    asgi_app = None
-
-# Add after_request handler to ensure CORS headers are always set
-# This is critical for OPTIONS preflight requests and works with both WSGI and ASGI
-@app.after_request
-def after_request(response):
-    # Add CORS headers to all responses (including errors)
-    # This ensures OPTIONS preflight requests always get proper headers
-    origin = request.headers.get('Origin')
-    if origin:
-        # Use the requesting origin if provided
-        response.headers.add('Access-Control-Allow-Origin', origin)
-    else:
-        # Fallback to * for requests without Origin header
-        response.headers.add('Access-Control-Allow-Origin', '*')
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With')
-    response.headers.add('Access-Control-Allow-Methods', 'GET, PUT, POST, DELETE, OPTIONS')
-    response.headers.add('Access-Control-Max-Age', '3600')
-    return response
-
-# Load the model on startup
-print("Loading AI detector model...")
+# Load the model on startup with memory optimizations
+print("Loading AI detector model with memory optimizations (float16, low_cpu_mem_usage)...")
 try:
     load_detector(use_gpu=False)
-    print("Model loaded successfully!")
+    print("Model loaded successfully! (Optimized for <512MB hosting)")
 except Exception as e:
     print(f"Error loading model: {e}")
 
@@ -67,7 +33,7 @@ def health():
     return jsonify({"status": "healthy"}), 200
 
 
-@app.route("/api/analyze", methods=["POST", "OPTIONS"])
+@app.route("/api/analyze", methods=["POST"])
 def analyze_text():
     """
     Analyze text for AI detection with explainability
@@ -109,11 +75,6 @@ def analyze_text():
         ]
     }
     """
-    # Handle OPTIONS preflight request - flask-cors should handle this automatically
-    # but we'll handle it explicitly to be safe
-    if request.method == "OPTIONS":
-        return jsonify({}), 200
-    
     try:
         data = request.get_json()
         
@@ -125,13 +86,18 @@ def analyze_text():
             return jsonify({"error": "Empty text provided"}), 400
         
         max_length = data.get("max_length", 512)
+        top_k = data.get("top_k", 20)
         
-        # Run the explainable analysis with top_k=20 for comprehensive highlighting
+        # Run the explainable analysis
         result = explain_text_with_features(
             text=text,
             max_length=max_length,
-            top_k=20
+            top_k=top_k
         )
+        
+        # Memory cleanup after analysis
+        import gc
+        gc.collect()
 
         words = result.get("words", [])
         word_importance = result.get("word_importance", [0.0] * len(words))
@@ -185,8 +151,6 @@ def analyze_text():
 
 
 if __name__ == "__main__":
-    # Run Flask app with built-in WSGI server
+    # Run Flask app
     port = int(os.environ.get("PORT", 5000))
-    print(f"Starting Flask server on port {port}...")
-    print("Note: If you want to use uvicorn, run: uvicorn backend.main:asgi_app --host 0.0.0.0 --port 5000")
     app.run(host="0.0.0.0", port=port, debug=True)

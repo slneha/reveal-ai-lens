@@ -1,8 +1,7 @@
 flask==3.0.0
 flask-cors==4.0.0
-asgiref==3.7.0
 torch
 transformers
-accelerate
+safetensors
 numpy
 pandas

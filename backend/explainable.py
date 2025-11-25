@@ -50,7 +50,8 @@ device = torch.device("cpu")
 
 def load_detector(model_name: str = MODEL_NAME, use_gpu: bool = False):
     """
-    Load the RoBERTa-based AI detector with efficient memory placement.
+    Load the RoBERTa-based AI detector with aggressive memory optimizations.
+    Uses float16, low memory loading, and explicit CPU placement to minimize RAM usage.
 
     Parameters
     ----------
@@ -64,63 +65,61 @@ def load_detector(model_name: str = MODEL_NAME, use_gpu: bool = False):
     tokenizer, model, device
     """
     global tokenizer, model, device
+    import gc
 
     print(f"Loading tokenizer for {model_name}...")
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     
-    print(f"Loading model with device_map='auto' for efficient memory placement...")
+    print(f"Loading model with aggressive memory optimizations (float16, low_cpu_mem_usage)...")
     
-    # Use device_map="auto" for efficient memory placement
-    # This automatically handles CPU/GPU placement and can split large models across devices
+    # Aggressive memory optimizations for <512MB hosting
+    device = torch.device("cpu")  # Force CPU to avoid GPU memory
+    
     try:
+        # Try loading with maximum memory optimizations
         model = AutoModelForSequenceClassification.from_pretrained(
             model_name,
-            device_map="auto",  # Automatic device placement for memory efficiency
-            torch_dtype=torch.float32,  # Use float32 for compatibility
+            torch_dtype=torch.float16,  # Half precision - halves memory usage
+            low_cpu_mem_usage=True,  # Reduces peak memory during loading
+            device_map="cpu",  # Explicit CPU placement
+            use_safetensors=True,  # More efficient format if available
         )
-        print("✓ Model loaded with device_map='auto'")
+        print("✓ Model loaded with float16 and low_cpu_mem_usage")
     except Exception as e:
-        print(f"Warning: device_map='auto' failed ({e}), falling back to manual placement")
-        # Fallback to manual device placement
-        model = AutoModelForSequenceClassification.from_pretrained(model_name)
-        if use_gpu and torch.cuda.is_available():
-            device = torch.device("cuda")
+        print(f"Warning: Optimized loading failed ({e}), trying fallback...")
+        try:
+            # Fallback: try without safetensors
+            model = AutoModelForSequenceClassification.from_pretrained(
+                model_name,
+                torch_dtype=torch.float16,
+                low_cpu_mem_usage=True,
+            )
             model = model.to(device)
-        else:
-            device = torch.device("cpu")
+            print("✓ Model loaded with float16 (fallback)")
+        except Exception as e2:
+            print(f"Warning: float16 failed ({e2}), using float32 as last resort...")
+            # Last resort: float32 but still with low_cpu_mem_usage
+            model = AutoModelForSequenceClassification.from_pretrained(
+                model_name,
+                low_cpu_mem_usage=True,
+            )
             model = model.to(device)
-        model.eval()
-        print(f"Model loaded successfully on device: {device}")
-        return tokenizer, model, device
+            print("✓ Model loaded with float32 (last resort)")
 
-    # Determine device from model's actual placement when using device_map
-    if hasattr(model, 'hf_device_map') and model.hf_device_map:
-        # Model was split across devices, determine primary device
-        device_map = model.hf_device_map
-        # Get the device of the first layer
-        first_layer_device = list(device_map.values())[0] if device_map else "cpu"
-        if isinstance(first_layer_device, int):
-            device = torch.device(f"cuda:{first_layer_device}" if torch.cuda.is_available() else "cpu")
-        elif isinstance(first_layer_device, str):
-            device = torch.device(first_layer_device)
-        else:
-            device = torch.device("cpu")
-        print(f"Model distributed across devices: {device_map}")
-    elif hasattr(model, 'device'):
-        device = model.device
-    else:
-        # Check where parameters actually are
-        first_param = next(model.parameters())
-        device = first_param.device
-    
-    # If use_gpu=False, ensure model is on CPU
-    if not use_gpu and device.type != "cpu":
-        print("Moving model to CPU as requested...")
-        model = model.to("cpu")
-        device = torch.device("cpu")
-
+    # Ensure model is on CPU and in eval mode
+    model = model.to(device)
     model.eval()
-    print(f"Model loaded successfully on device: {device}")
+    
+    # Disable gradient computation globally for this model
+    for param in model.parameters():
+        param.requires_grad = False
+    
+    # Force garbage collection after loading
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    
+    print(f"Model loaded successfully on device: {device} (dtype: {next(model.parameters()).dtype})")
     return tokenizer, model, device
 
 
@@ -500,42 +499,59 @@ def get_token_importance(
     target_class: 0 (human-produced) or 1 (machine-generated).
 
     Uses gradients wrt input embeddings as saliency.
+    Memory-optimized: enables gradients only when needed, clears immediately after.
     """
     assert tokenizer is not None and model is not None, "Call load_detector() first."
 
-    # Tokenize
-    enc = tokenizer(
-        text,
-        return_tensors="pt",
-        truncation=True,
-        max_length=max_length,
-        padding=False,
-    )
-    input_ids = enc["input_ids"].to(device)  # [1, L]
-    attention_mask = enc["attention_mask"].to(device)
-
-    # Get input embeddings
-    emb_layer = model.get_input_embeddings()
-    input_embeds = emb_layer(input_ids)  # [1, L, H]
-    input_embeds.retain_grad()
-
-    # Forward with embeds
+    # Enable gradients temporarily for this computation
     model.zero_grad()
-    outputs = model(inputs_embeds=input_embeds, attention_mask=attention_mask)
-    logits = outputs.logits  # [1, 2]
-    logit = logits[0, target_class]
+    for param in model.parameters():
+        param.requires_grad = True
+    
+    try:
+        # Tokenize
+        enc = tokenizer(
+            text,
+            return_tensors="pt",
+            truncation=True,
+            max_length=max_length,
+            padding=False,
+        )
+        input_ids = enc["input_ids"].to(device)  # [1, L]
+        attention_mask = enc["attention_mask"].to(device)
 
-    # Backward
-    logit.backward()
+        # Get input embeddings
+        emb_layer = model.get_input_embeddings()
+        input_embeds = emb_layer(input_ids)  # [1, L, H]
+        input_embeds.retain_grad()
 
-    # Gradients wrt embeddings
-    grads = input_embeds.grad[0]  # [L, H]
-    token_importance = grads.norm(dim=-1).detach().cpu().numpy()
+        # Forward with embeds
+        outputs = model(inputs_embeds=input_embeds, attention_mask=attention_mask)
+        logits = outputs.logits  # [1, 2]
+        logit = logits[0, target_class]
 
-    token_ids = input_ids[0].detach().cpu().tolist()
-    tokens = tokenizer.convert_ids_to_tokens(token_ids)
+        # Backward
+        logit.backward()
 
-    return tokens, token_importance
+        # Gradients wrt embeddings - move to CPU immediately
+        grads = input_embeds.grad[0]  # [L, H]
+        token_importance = grads.norm(dim=-1).detach().cpu().numpy()
+
+        token_ids = input_ids[0].detach().cpu().tolist()
+        tokens = tokenizer.convert_ids_to_tokens(token_ids)
+        
+        # Clear gradients and intermediate tensors
+        model.zero_grad()
+        del input_embeds, grads, outputs, logits, logit
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        
+        return tokens, token_importance
+    finally:
+        # Always disable gradients after computation to save memory
+        for param in model.parameters():
+            param.requires_grad = False
+        model.eval()
 
 
 # ============================================================
@@ -907,15 +923,22 @@ def explain_text_with_features(
         truncation=True,
         max_length=max_length,
         padding=True,
-    ).to(device)
+    )
+    input_ids = enc["input_ids"].to(device)
+    attention_mask = enc["attention_mask"].to(device)
 
     with torch.no_grad():
-        outputs = model(**enc)
+        outputs = model(input_ids=input_ids, attention_mask=attention_mask)
         logits = outputs.logits[0].cpu().numpy()
+        # Clear intermediate tensors immediately
+        del outputs, input_ids, attention_mask
+        import gc
+        gc.collect()
 
     probs = torch.softmax(torch.tensor(logits), dim=-1).numpy()
     p_human, p_ai = float(probs[0]), float(probs[1])
     pred = int(np.argmax(probs))  # 0=Human,1=AI
+    del logits, probs
 
     # 2) compute features for this text only
     lex = lexical_features(text)
@@ -1194,6 +1217,212 @@ def explain_text_with_features(
         "feature_impacts": feature_impacts,
     }
 
+
+# ============================================================
+# 8. HYBRID APPROACH: Frontend saliency + Backend features
+# ============================================================
+
+def explain_text_with_frontend_saliency(
+    text: str,
+    frontend_saliency: Dict[str, Any],
+    max_length: int = 512,
+    top_k: int = 3,
+) -> Dict[str, Any]:
+    """
+    Generate explanations using saliency scores from frontend (browser-based model)
+    and feature extraction from backend.
+    
+    This hybrid approach:
+    - Frontend: Runs model inference and computes saliency (no memory on backend)
+    - Backend: Extracts linguistic features and combines with frontend saliency
+    
+    Parameters:
+    -----------
+    text : str
+        Input text to analyze
+    frontend_saliency : dict
+        Contains:
+            - tokens: List[str] - tokenized words
+            - token_scores: List[float] - saliency scores for each token
+            - prediction: int - 0=Human, 1=AI
+            - p_ai: float - probability of AI
+            - p_human: float - probability of Human
+    max_length : int
+        Maximum text length
+    top_k : int
+        Number of top spans to return
+        
+    Returns:
+    --------
+    dict with prediction, features, spans, etc.
+    """
+    # Extract frontend results
+    frontend_tokens = frontend_saliency.get("tokens", [])
+    frontend_scores = frontend_saliency.get("token_scores", [])
+    pred = frontend_saliency.get("prediction", 0)
+    p_ai = frontend_saliency.get("p_ai", 0.5)
+    p_human = frontend_saliency.get("p_human", 0.5)
+    
+    # Use frontend tokens or fallback to simple word tokenization
+    if not frontend_tokens:
+        words = _simple_word_tokens(text)
+    else:
+        words = frontend_tokens
+    
+    if len(words) == 0:
+        return {
+            "prediction": pred,
+            "p_ai": p_ai,
+            "p_human": p_human,
+            "global_scores": {},
+            "spans": [],
+            "words": [],
+            "word_importance": [],
+        }
+    
+    # Map frontend token scores to words
+    word_sal = np.array(frontend_scores[:len(words)], dtype=float)
+    if len(word_sal) < len(words):
+        word_sal = np.pad(word_sal, (0, len(words) - len(word_sal)), mode='constant')
+    
+    # Normalize word saliency
+    if word_sal.max() > 0:
+        word_sal = word_sal / word_sal.max()
+    else:
+        word_sal = np.ones(len(words), dtype=float) * 0.5
+    
+    # Compute linguistic features (backend does this)
+    lex = lexical_features(text)
+    form = formality_features(text)
+    syn = syntactic_features(text)
+    burst = compute_burstiness(text)
+    
+    raw_feature_values = {
+        "lex_long_word_ratio": float(lex["lex_long_word_ratio"]),
+        "lex_avg_word_len": float(lex["lex_avg_word_len"]),
+        "form_connector_ratio": float(form["form_connector_ratio"]),
+        "form_first_person_ratio": float(form["form_first_person_ratio"]),
+        "form_contraction_ratio": float(form["form_contraction_ratio"]),
+        "syn_avg_sent_len": float(syn["syn_avg_sent_len"]),
+        "syn_comma_per_sent": float(syn["syn_comma_per_sent"]),
+        "burstiness": float(burst),
+    }
+    
+    normalized_features = {
+        "lex_long_word_ratio": _clamp01(raw_feature_values["lex_long_word_ratio"]),
+        "lex_avg_word_len": _clamp01((raw_feature_values["lex_avg_word_len"] - 3.0) / 7.0),
+        "form_connector_ratio": _clamp01(raw_feature_values["form_connector_ratio"]),
+        "form_first_person_ratio": _clamp01(raw_feature_values["form_first_person_ratio"]),
+        "form_contraction_ratio": _clamp01(raw_feature_values["form_contraction_ratio"]),
+        "syn_avg_sent_len": _clamp01(raw_feature_values["syn_avg_sent_len"] / 40.0),
+        "syn_comma_per_sent": _clamp01(raw_feature_values["syn_comma_per_sent"] / 5.0),
+        "burstiness": _clamp01(math.tanh(raw_feature_values["burstiness"])),
+    }
+    
+    # Compute global feature scores
+    lex_norm = float(np.mean([normalized_features["lex_long_word_ratio"], normalized_features["lex_avg_word_len"]]))
+    form_norm = float(np.mean([normalized_features["form_connector_ratio"], 1.0 - normalized_features["form_first_person_ratio"]]))
+    burst_raw = raw_feature_values["burstiness"]
+    burst_norm = _clamp01(math.tanh(burst_raw))
+    
+    global_scores = {
+        "lexical_complexity": lex_norm,
+        "formality": form_norm,
+        "burstiness": burst_norm,
+    }
+    
+    # Feature impacts
+    feature_impacts: List[Dict[str, Any]] = []
+    for key, corr in FEATURE_CORRELATIONS.items():
+        if key == "burstiness":
+            continue
+        meta = FEATURE_METADATA.get(key, {"label": key.replace("_", " ").title(), "description": ""})
+        raw_val = raw_feature_values.get(key, 0.0)
+        deviation = _feature_deviation(key, raw_val)
+        signed_score = corr * deviation
+        feature_impacts.append({
+            "key": key,
+            "label": meta["label"],
+            "description": meta["description"],
+            "raw_value": raw_val,
+            "deviation": deviation,
+            "correlation": corr,
+            "signed_score": signed_score,
+            "direction": "ai" if signed_score >= 0 else "human",
+            "source": "global",
+        })
+    
+    # Get sentence-level features
+    sent_ids = assign_sentence_ids(words)
+    lex_loc, form_loc, burst_loc = get_word_level_feature_scores(words, sent_ids)
+    
+    def _nz_norm(x: np.ndarray) -> np.ndarray:
+        x = np.array(x, dtype=float)
+        if x.max() > 0:
+            x = x / x.max()
+        return x
+    
+    lex_loc = _nz_norm(lex_loc)
+    form_loc = _nz_norm(form_loc)
+    burst_loc = _nz_norm(burst_loc)
+    
+    # Combine: global strength × local indicator × frontend saliency
+    g_lex = global_scores["lexical_complexity"]
+    g_form = global_scores["formality"]
+    g_burst = global_scores["burstiness"]
+    
+    lex_contrib = g_lex * lex_loc * word_sal
+    form_contrib = g_form * form_loc * word_sal
+    burst_contrib = g_burst * burst_loc * word_sal
+    
+    total_score = lex_contrib + form_contrib + burst_contrib
+    
+    # Select top spans
+    spans = select_top_spans(
+        words,
+        total_score,
+        lex_contrib,
+        form_contrib,
+        burst_contrib,
+        top_k=top_k,
+        min_len=3,
+        max_len=8,
+    )
+    
+    # Sentence summaries
+    sentences = []
+    current_sent = []
+    current_sent_id = 0
+    
+    for i, word in enumerate(words):
+        if i < len(sent_ids):
+            if sent_ids[i] != current_sent_id and current_sent:
+                sent_text = " ".join(current_sent)
+                sent_score = float(np.mean([word_sal[j] for j in range(i - len(current_sent), i) if j < len(word_sal)]))
+                sentences.append({"text": sent_text, "score": sent_score})
+                current_sent = []
+                current_sent_id = sent_ids[i]
+            current_sent.append(word)
+    
+    if current_sent:
+        sent_text = " ".join(current_sent)
+        sent_score = float(np.mean([word_sal[j] for j in range(len(words) - len(current_sent), len(words)) if j < len(word_sal)]))
+        sentences.append({"text": sent_text, "score": sent_score})
+    
+    return {
+        "prediction": pred,
+        "p_ai": p_ai,
+        "p_human": p_human,
+        "global_scores": global_scores,
+        "spans": spans,
+        "words": words,
+        "word_importance": word_sal.tolist(),
+        "lex_contrib": lex_contrib.tolist(),
+        "form_contrib": form_contrib.tolist(),
+        "burst_contrib": burst_contrib.tolist(),
+        "sentences": sentences,
+        "feature_impacts": feature_impacts,
+    }
 
 
 # ============================================================

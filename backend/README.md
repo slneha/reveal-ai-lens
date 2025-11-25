@@ -10,23 +10,11 @@ pip install -r requirements.txt
 ```
 
 2. Run the Flask server:
-
-**Option 1: Flask built-in server (Recommended):**
 ```bash
 python main.py
 ```
 
-**Option 2: With uvicorn (requires asgiref):**
-```bash
-uvicorn backend.main:asgi_app --host 0.0.0.0 --port 5000 --reload
-```
-
 The API will start on `http://localhost:5000`
-
-**Note:** Flask is a WSGI application. If you see errors about "missing start_response", make sure you're either:
-- Using `python main.py` (Flask's built-in WSGI server)
-- Using `uvicorn backend.main:asgi_app` (with ASGI wrapper)
-- NOT using `uvicorn backend.main:app` (this won't work with Flask)
 
 ## API Endpoints
 
