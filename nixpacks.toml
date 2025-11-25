@@ -5,20 +5,35 @@ providers = ["python"]
 
 [phases.setup]
 # Use python311 from Nixpkgs
-# venv is included with python311, no need to install pip separately
 nixPkgs = ["python311"]
 
 [phases.install]
 # Create virtual environment to work around externally-managed-environment
-# This is the recommended way to install packages in Nix-managed Python
+# CRITICAL: Prevent model downloads during build (models download at runtime)
+# Optimize for smaller image size: use CPU-only PyTorch and aggressive cleanup
 cmds = [
   "python -m venv /app/venv",
-  "/app/venv/bin/pip install --upgrade pip",
-  "/app/venv/bin/pip install -r backend/requirements.txt"
+  "/app/venv/bin/pip install --upgrade pip --no-cache-dir",
+  # Install CPU-only PyTorch first (smaller, no CUDA dependencies ~500MB-1GB savings)
+  "/app/venv/bin/pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu",
+  # Install remaining requirements
+  "/app/venv/bin/pip install --no-cache-dir flask==3.0.0 flask-cors==4.0.0 transformers safetensors numpy pandas psutil accelerate",
+  # Aggressive cleanup to reduce image size
+  "/app/venv/bin/pip cache purge || true",
+  "rm -rf /root/.cache || true",
+  "rm -rf /tmp/.cache || true",
+  "rm -rf /tmp/*.tmp || true",
+  "find /app/venv -type d -name __pycache__ -exec rm -r {} + || true",
+  "find /app/venv -name '*.pyc' -delete || true",
+  "find /app/venv -name '*.pyo' -delete || true"
 ]
 
 [phases.build]
-cmds = []
+# Additional cleanup in build phase
+cmds = [
+  "rm -rf /tmp/* || true",
+  "rm -rf /var/tmp/* || true"
+]
 
 [start]
 # Use Python from venv
